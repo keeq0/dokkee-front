@@ -42,3 +42,16 @@ vi.mock('@/assets/trash.svg', () => ({ default: 'trash-mock.svg' }))
 // Добавьте другие картинки по мере необходимости (или один универсальный мок):
 vi.mock('@/assets/*.png', () => ({ default: 'mock-image.png' }))
 vi.mock('@/assets/*.svg', () => ({ default: 'mock-image.svg' }))
+
+
+// Мок для IntersectionObserver
+global.IntersectionObserver = class IntersectionObserver {
+  constructor(callback) {
+    this.callback = callback
+  }
+  observe() {
+    this.callback([{ isIntersecting: true, target: {} }])
+  }
+  unobserve() {}
+  disconnect() {}
+}
