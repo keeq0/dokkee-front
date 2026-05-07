@@ -20,7 +20,7 @@ jobs:
       - name: Run linter via docker compose
         run: |
           docker compose --profile test run --rm test-lint
-    unit:
+  unit:
     name: Unit tests (Vitest)
     runs-on: ubuntu-latest
     steps:
