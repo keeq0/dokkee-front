@@ -54,7 +54,18 @@ services:
     environment:
       - BASE_URL=http://frontend:8080
       - CI=1
-
+  build-check:
+    build:
+      context: .
+      target: test
+    profiles: ["test"]
+    volumes:
+      - ./src:/app/src
+      - ./public:/app/public
+      - ./babel.config.js:/app/babel.config.js
+      - ./vue.config.js:/app/vue.config.js
+      - ./jsconfig.json:/app/jsconfig.json
+    command: ["npm", "run", "build"]
   test-lint:
     build:
       context: .
