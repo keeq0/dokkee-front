@@ -1,6 +1,4 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
-import AnalysisResult from '@/components/AnalysisResult.vue'
 
 // Полностью мокаем компонент, чтобы не грузить pdfjs
 vi.mock('@/components/AnalysisResult.vue', () => ({
