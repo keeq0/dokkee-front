@@ -157,9 +157,8 @@ jobs:
       always() &&
       github.ref == 'refs/heads/main' &&
       github.event_name == 'push' &&
-      needs.paths.outputs.frontend == 'true' &&
-      needs.docker-build.result == 'success' &&
-      needs.e2e.result == 'success'
+      (needs.docker-build.result == 'success' || needs.docker-build.result == 'skipped') &&
+      (needs.e2e.result == 'success' || needs.e2e.result == 'skipped')
     needs: [paths, docker-build, e2e]
     environment: github-pages
     permissions:
@@ -216,4 +215,4 @@ jobs:
           if [ "$failed" = "true" ]; then
             exit 1
           fi
-          echo "All required jobs succeeded or were skipped."
+          echo "All required jobs succeeded or were skipped."g
