@@ -137,6 +137,9 @@
 import DropMenu from '@/components/DropMenu.vue'
 import UploadFilesList from '@/components/UploadFilesList.vue' 
 
+import pdfIcon from '@/assets/pdf.png'
+import docIcon from '@/assets/doc.png'
+
 export default {
   name: 'UploadDocuments',
   components: { 
@@ -240,13 +243,10 @@ export default {
       this.files.push(...filteredFiles);
     },
     getFileIcon(file) {
-      const ext = file.name.split('.').pop().toLowerCase();
-      if (ext === 'pdf') {
-        return require('@/assets/pdf.png');
-      } else if (ext === 'doc' || ext === 'docx') {
-        return require('@/assets/doc.png');
-      }
-    },
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (ext === 'pdf') return pdfIcon;
+  if (ext === 'doc' || ext === 'docx') return docIcon;
+},
     formatFileSize(size) {
       if (size < 1024) {
         return size + ' B';
