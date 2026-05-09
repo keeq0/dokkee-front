@@ -2,7 +2,10 @@
     <header class="header">
       <div class="header__left">
         <a href="#" class="header__logo-link">
-          <img src="@/assets/logo.svg" class="header__logo" alt="Логотип" />
+          <div class="header__logo-rectangle">
+            <div class="header__logo-rectangle--inside"></div>
+          </div>
+          <p>Dockee</p>
         </a>
         <div class="header__message">
           <strong>Добрый день, {{ userName }}!</strong>
@@ -70,7 +73,7 @@
   <style scoped>
   .header {
     margin: 0 auto;
-    width: 1200px;
+    width: 1250px;
     height: 80px;
     display: flex;
     align-items: center;
@@ -80,7 +83,7 @@
   .header__left {
     display: flex;
     align-items: center;
-    gap: 20px;
+    gap: 30px;
   }
   
   .header__logo {
@@ -103,6 +106,33 @@
     display: flex;
     align-items: center;
     gap: 15px;
+  }
+
+  .header__logo-rectangle {
+    width: 26px;
+    height: 26px;
+    background-color: #6C67FD;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .header__logo-rectangle--inside {
+    width: 10px;
+    height: 10px;
+    background-color: #FFF;
+    border-radius: 50px;
+  }
+
+  .header__logo-link {
+    font-size: 24px;
+    font-weight: 700;
+    color: #000;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+
   }
   </style>
   
