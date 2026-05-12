@@ -39,6 +39,24 @@
           </div>
           <p class="bar__percentage">{{ progressPercent }}%</p>
         </div>
+        <div
+          v-if="documents.length > 0"
+          class="progress__popover"
+          role="tooltip">
+          <ul class="progress__popover-list">
+            <li
+              v-for="item in documentProgressList"
+              :key="item.id"
+              class="progress__popover-item"
+              :class="{ 'progress__popover-item--active': item.isSelected }">
+              <span class="progress__popover-name" :title="item.name">{{ item.name }}</span>
+              <div class="progress__popover-bar">
+                <div class="progress__popover-fill" :style="{ width: item.progress + '%' }"></div>
+              </div>
+              <span class="progress__popover-percent">{{ item.progress }}%</span>
+            </li>
+          </ul>
+        </div>
       </div>
     </div>
     <div class="analysis__content">
@@ -99,6 +117,10 @@ import mammoth from 'mammoth';
 import { mapStores } from 'pinia';
 import { chatCompletion, DEEPSEEK_MODELS } from '@/services/deepseek';
 import { useDocumentsStore, DOCUMENT_STATUS } from '@/stores/documents';
+import {
+  createProgressEmulator,
+  getProgressStatusText
+} from '@/composables/useAnalysisProgress';
 
 export default {
   name: 'AnalysisResult',
@@ -118,9 +140,10 @@ export default {
       minZoom: 1,
       maxZoom: 3,
       resizing: false,
-      abortController: null,
       fileSelectorOpen: false,
-      renderedDocId: null
+      renderedDocId: null,
+      analysisControllers: new Map(),
+      emulators: new Map()
     };
   },
   computed: {
@@ -166,10 +189,21 @@ export default {
       return this.selectedDocument?.progress ?? 0;
     },
     progressStatusText() {
-      if (this.analysisInProgress) return 'Читаю файл..';
       if (this.analysisError) return 'Ошибка анализа';
       if (this.analysisComplete) return 'Анализ завершён';
+      if (this.analysisInProgress) {
+        return getProgressStatusText(this.progressPercent);
+      }
+      if (!this.hasDocument) return 'Загрузите документ(-ы) для начала работы';
       return 'Загрузите документ(-ы) для начала работы';
+    },
+    documentProgressList() {
+      return this.documents.map((doc) => ({
+        id: doc.id,
+        name: doc.name,
+        progress: doc.status === DOCUMENT_STATUS.DONE ? 100 : doc.progress || 0,
+        isSelected: this.selectedDocument?.id === doc.id
+      }));
     }
   },
   methods: {
@@ -211,30 +245,66 @@ export default {
       }
       this.renderedDocId = doc.id;
     },
-    async runAnalysisForSelected() {
-      const doc = this.selectedDocument;
+    startAnalysisForAll() {
+      this.documents.forEach((doc) => {
+        if (doc.status !== DOCUMENT_STATUS.IDLE) return;
+        if (doc.analysisResult || doc.analysisError) return;
+        this.runAnalysisFor(doc.id);
+      });
+    },
+    startEmulatorFor(docId) {
+      this.stopEmulatorFor(docId);
+      const emulator = createProgressEmulator({
+        onProgress: (value) => {
+          const item = this.documentsStore.byId(docId);
+          if (!item) return;
+          if (item.status === DOCUMENT_STATUS.DONE || item.status === DOCUMENT_STATUS.ERROR) return;
+          this.documentsStore.setProgress(docId, value);
+        }
+      });
+      this.emulators.set(docId, emulator);
+      emulator.start();
+    },
+    stopEmulatorFor(docId) {
+      const emulator = this.emulators.get(docId);
+      if (emulator) {
+        emulator.stop();
+        this.emulators.delete(docId);
+      }
+    },
+    async runAnalysisFor(docId) {
+      const doc = this.documentsStore.byId(docId);
       if (!doc) return;
       if (doc.analysisResult || doc.analysisError) return;
       if (doc.status === DOCUMENT_STATUS.ANALYZING || doc.status === DOCUMENT_STATUS.EXTRACTING) return;
 
+      this.startEmulatorFor(docId);
+
       let text = doc.extractedText;
       if (!text) {
-        this.documentsStore.setStatus(doc.id, DOCUMENT_STATUS.EXTRACTING);
+        this.documentsStore.setStatus(docId, DOCUMENT_STATUS.EXTRACTING);
         if (doc.type === 'pdf') {
           text = await this.extractPdfText(doc);
         } else if (doc.type === 'docx') {
-          text = doc.extractedText;
+          if (!doc.htmlPreview) {
+            await this.renderDocx(doc);
+          }
+          text = this.documentsStore.byId(docId)?.extractedText || '';
         }
-        if (text) this.documentsStore.setExtractedText(doc.id, text);
+        if (text) this.documentsStore.setExtractedText(docId, text);
       }
-      if (!text) return;
+      if (!text) {
+        this.stopEmulatorFor(docId);
+        this.documentsStore.setAnalysisError(docId, true);
+        return;
+      }
       await this.analyzeDocument(doc, text);
     },
     async analyzeDocument(doc, text) {
-      if (this.abortController) {
-        this.abortController.abort();
-      }
-      this.abortController = new AbortController();
+      const existingController = this.analysisControllers.get(doc.id);
+      if (existingController) existingController.abort();
+      const controller = new AbortController();
+      this.analysisControllers.set(doc.id, controller);
       this.documentsStore.setStatus(doc.id, DOCUMENT_STATUS.ANALYZING);
 
       const prompt = `Ты — ведущий эксперт с 15+ годами опыта в анализе юридических, технических и коммерческих документов. Твоя задача — провести многоуровневый аудит, выявляя не только явные, но и скрытые риски, пробелы и возможности для оптимизации.
@@ -298,17 +368,21 @@ ${text.substring(0, 15000)}`;
           topP: 0.7,
           maxTokens: 8000,
           extra: { max_cot_tokens: 8000 },
-          signal: this.abortController.signal
+          signal: controller.signal
         });
+        this.stopEmulatorFor(doc.id);
         this.documentsStore.setAnalysisResult(doc.id, result);
-        this.$emit('analysis-complete', { result, error: false });
+        this.$emit('analysis-complete', { result, error: false, documentId: doc.id });
       } catch (error) {
+        this.stopEmulatorFor(doc.id);
         if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') {
           return;
         }
         console.error('Ошибка при анализе документа:', error?.message || error);
         this.documentsStore.setAnalysisError(doc.id, true);
-        this.$emit('analysis-complete', { result: null, error: true });
+        this.$emit('analysis-complete', { result: null, error: true, documentId: doc.id });
+      } finally {
+        this.analysisControllers.delete(doc.id);
       }
     },
 
@@ -426,14 +500,14 @@ ${text.substring(0, 15000)}`;
         }
         await this.$nextTick();
         await this.renderSelectedDocument();
-        await this.runAnalysisForSelected();
       }
     }
   },
   beforeUnmount() {
-    if (this.abortController) {
-      this.abortController.abort();
-    }
+    this.analysisControllers.forEach((controller) => controller.abort());
+    this.analysisControllers.clear();
+    this.emulators.forEach((emulator) => emulator.stop());
+    this.emulators.clear();
   }
 };
 </script>
@@ -873,12 +947,90 @@ ${text.substring(0, 15000)}`;
 }
 
 .analysis__progress {
+  position: relative;
   width: 300px;
   min-height: 30px;
   border: 1px solid #e6e6e6;
   border-radius: 16px;
   display: flex;
   align-items: stretch;
+}
+
+.progress__popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 280px;
+  max-width: 360px;
+  background: #fff;
+  border: 1px solid #e6e6e6;
+  border-radius: 12px;
+  padding: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.1);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 30;
+}
+
+.analysis__progress:hover .progress__popover,
+.analysis__progress:focus-within .progress__popover {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.progress__popover-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.progress__popover-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 80px 36px;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #333;
+}
+
+.progress__popover-item--active {
+  background: rgba(108, 103, 253, 0.08);
+  color: #6c67fd;
+  font-weight: 600;
+}
+
+.progress__popover-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.progress__popover-bar {
+  height: 6px;
+  background: #e9e9e9;
+  border-radius: 50px;
+  overflow: hidden;
+}
+
+.progress__popover-fill {
+  height: 100%;
+  background: #4caf50;
+  border-radius: 50px;
+  transition: width 0.3s ease;
+}
+
+.progress__popover-percent {
+  font-size: 11px;
+  text-align: right;
+  color: inherit;
 }
 
 .progress__info {
