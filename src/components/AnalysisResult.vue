@@ -4,9 +4,23 @@
       <div class="analysis__header-left">
       <div class="analysis__file-selector">
         <p class="file-selector__text">Файл:</p>
-        <div class="file-selector">
-          <p class="file">{{ truncatedDocumentName }} ({{ totalPages }} стр.)</p>
+        <div
+          class="file-selector"
+          :class="{ 'file-selector--disabled': documents.length === 0, 'file-selector--open': fileSelectorOpen }"
+          @click="openFileSelector">
+          <p class="file">{{ truncatedDocumentName }}{{ totalPages ? ` (${totalPages} стр.)` : '' }}</p>
           <img src="@/assets/black-arrow.png" class="file-selector__icon" />
+          <ul v-if="fileSelectorOpen" class="file-selector__dropdown" @click.stop>
+            <li
+              v-for="doc in documents"
+              :key="doc.id"
+              class="file-selector__item"
+              :class="{ 'file-selector__item--active': selectedDocument && doc.id === selectedDocument.id }"
+              @click="selectDocument(doc.id)">
+              <span class="file-selector__item-name">{{ doc.name }}</span>
+              <span class="file-selector__item-type">{{ doc.type ? doc.type.toUpperCase() : '' }}</span>
+            </li>
+          </ul>
         </div>
       </div>
       <div class="analysis__font-size-selector">
@@ -81,25 +95,21 @@
 </template>
 
 <script>
+import mammoth from 'mammoth';
+import { mapStores } from 'pinia';
 import { chatCompletion, DEEPSEEK_MODELS } from '@/services/deepseek';
+import { useDocumentsStore, DOCUMENT_STATUS } from '@/stores/documents';
 
 export default {
   name: 'AnalysisResult',
   components: {},
   props: {
-    documentUrl: {
-      type: String,
-      default: ''
-    },
-    documentName: {
-      type: String,
-      default: 'Документ'
-    },
     expanded: {
       type: Boolean,
-      default: false,
+      default: false
     }
   },
+  emits: ['analysis-complete', 'show-assistant'],
   data() {
     return {
       totalPages: 0,
@@ -107,27 +117,53 @@ export default {
       zoom: 1.5,
       minZoom: 1,
       maxZoom: 3,
-      analysisResult: null,
-      analysisError: false,
       resizing: false,
-      analysisInProgress: false,   // защита от параллельных вызовов
-      abortController: null        // для отмены запроса
+      abortController: null,
+      fileSelectorOpen: false,
+      renderedDocId: null
     };
   },
   computed: {
+    ...mapStores(useDocumentsStore),
+    documents() {
+      return this.documentsStore.items;
+    },
+    selectedDocument() {
+      return this.documentsStore.selected;
+    },
+    documentName() {
+      return this.selectedDocument?.name || 'Документ';
+    },
+    documentUrl() {
+      return this.selectedDocument?.url || '';
+    },
+    documentType() {
+      return this.selectedDocument?.type || null;
+    },
+    analysisResult() {
+      return this.selectedDocument?.analysisResult ?? null;
+    },
+    analysisError() {
+      return this.selectedDocument?.analysisError ?? false;
+    },
+    analysisInProgress() {
+      const status = this.selectedDocument?.status;
+      return status === DOCUMENT_STATUS.EXTRACTING || status === DOCUMENT_STATUS.ANALYZING;
+    },
     truncatedDocumentName() {
       return this.documentName && this.documentName.length > 15
         ? this.documentName.slice(0, 15) + '..'
         : this.documentName;
     },
     hasDocument() {
-      return Boolean(this.documentUrl);
+      return Boolean(this.selectedDocument);
     },
     analysisComplete() {
       return this.analysisResult !== null && !this.analysisError && !this.analysisInProgress;
     },
     progressPercent() {
-      return this.analysisComplete ? 100 : 0;
+      if (this.analysisComplete) return 100;
+      return this.selectedDocument?.progress ?? 0;
     },
     progressStatusText() {
       if (this.analysisInProgress) return 'Читаю файл..';
@@ -137,15 +173,69 @@ export default {
     }
   },
   methods: {
-    async analyzeDocument(text) {
-      if (this.analysisInProgress) return;
-      this.analysisInProgress = true;
+    openFileSelector() {
+      if (this.documents.length > 0) {
+        this.fileSelectorOpen = !this.fileSelectorOpen;
+      }
+    },
+    selectDocument(id) {
+      this.fileSelectorOpen = false;
+      if (id === this.documentsStore.selectedId) return;
+      this.documentsStore.select(id);
+    },
+    async ensurePdfJs() {
+      if (this.pdfjsLib) return this.pdfjsLib;
+      const pdfLibUrl = '/pdfjs/legacy/build/pdf.mjs';
+      try {
+        this.pdfjsLib = await import(/* webpackIgnore: true */ /* @vite-ignore */ pdfLibUrl);
+        this.pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdfjs/legacy/build/pdf.worker.mjs';
+        return this.pdfjsLib;
+      } catch (error) {
+        console.warn('PDF.js не загружен:', error?.message || error);
+        return null;
+      }
+    },
+    async renderSelectedDocument() {
+      const doc = this.selectedDocument;
+      if (!doc) return;
+      if (this.renderedDocId === doc.id && doc.htmlPreview) return;
+      const container = this.$refs.documentContainer;
+      if (!container) return;
 
-      // Отменяем предыдущий незавершённый запрос
+      container.querySelectorAll('.pdf-page-container, .docx-preview').forEach((el) => el.remove());
+
+      if (doc.type === 'pdf') {
+        await this.renderPDF(doc);
+      } else if (doc.type === 'docx') {
+        await this.renderDocx(doc);
+      }
+      this.renderedDocId = doc.id;
+    },
+    async runAnalysisForSelected() {
+      const doc = this.selectedDocument;
+      if (!doc) return;
+      if (doc.analysisResult || doc.analysisError) return;
+      if (doc.status === DOCUMENT_STATUS.ANALYZING || doc.status === DOCUMENT_STATUS.EXTRACTING) return;
+
+      let text = doc.extractedText;
+      if (!text) {
+        this.documentsStore.setStatus(doc.id, DOCUMENT_STATUS.EXTRACTING);
+        if (doc.type === 'pdf') {
+          text = await this.extractPdfText(doc);
+        } else if (doc.type === 'docx') {
+          text = doc.extractedText;
+        }
+        if (text) this.documentsStore.setExtractedText(doc.id, text);
+      }
+      if (!text) return;
+      await this.analyzeDocument(doc, text);
+    },
+    async analyzeDocument(doc, text) {
       if (this.abortController) {
         this.abortController.abort();
       }
       this.abortController = new AbortController();
+      this.documentsStore.setStatus(doc.id, DOCUMENT_STATUS.ANALYZING);
 
       const prompt = `Ты — ведущий эксперт с 15+ годами опыта в анализе юридических, технических и коммерческих документов. Твоя задача — провести многоуровневый аудит, выявляя не только явные, но и скрытые риски, пробелы и возможности для оптимизации.
 
@@ -198,7 +288,7 @@ export default {
 ${text.substring(0, 15000)}`;
 
       try {
-        this.analysisResult = await chatCompletion({
+        const result = await chatCompletion({
           model: DEEPSEEK_MODELS.REASONER,
           messages: [
             { role: 'system', content: 'You are a professional document analyst. Always respond in Russian, following the exact formatting instructions.' },
@@ -210,55 +300,65 @@ ${text.substring(0, 15000)}`;
           extra: { max_cot_tokens: 8000 },
           signal: this.abortController.signal
         });
-        this.analysisError = false;
+        this.documentsStore.setAnalysisResult(doc.id, result);
+        this.$emit('analysis-complete', { result, error: false });
       } catch (error) {
         if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') {
           return;
         }
         console.error('Ошибка при анализе документа:', error?.message || error);
-        this.analysisResult = null;
-        this.analysisError = true;
-      } finally {
-        this.analysisInProgress = false;
-        this.$emit('analysis-complete', {
-          result: this.analysisResult,
-          error: this.analysisError
-        });
+        this.documentsStore.setAnalysisError(doc.id, true);
+        this.$emit('analysis-complete', { result: null, error: true });
       }
     },
 
-    async extractPdfText() {
-      if (!this.documentUrl || !this.pdfjsLib) return;
-      const loadingTask = this.pdfjsLib.getDocument(this.documentUrl);
+    async extractPdfText(doc) {
+      const lib = await this.ensurePdfJs();
+      if (!doc?.url || !lib) return '';
+      const loadingTask = lib.getDocument(doc.url);
       const pdf = await loadingTask.promise;
       this.totalPages = pdf.numPages;
       let fullText = '';
-      
       for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
         const page = await pdf.getPage(pageNumber);
         const textContent = await page.getTextContent();
-        const pageText = textContent.items.map(item => item.str).join(' ');
+        const pageText = textContent.items.map((item) => item.str).join(' ');
         fullText += pageText + '\n';
       }
-      
-      await this.analyzeDocument(fullText);
+      return fullText;
     },
 
-    async renderPDF() {
-      if (!this.documentUrl || !this.pdfjsLib) return;
+    async renderDocx(doc) {
+      if (!doc?.file) return;
+      const arrayBuffer = await doc.file.arrayBuffer();
+      const { value: html } = await mammoth.convertToHtml({ arrayBuffer });
+      this.documentsStore.setHtmlPreview(doc.id, html);
+
+      const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      if (text && !doc.extractedText) {
+        this.documentsStore.setExtractedText(doc.id, text);
+      }
+      this.totalPages = 1;
+
+      const container = this.$refs.documentContainer;
+      if (!container) return;
+      const wrapper = document.createElement('div');
+      wrapper.className = 'docx-preview';
+      wrapper.innerHTML = html;
+      container.appendChild(wrapper);
+    },
+
+    async renderPDF(doc) {
+      const lib = await this.ensurePdfJs();
+      if (!doc?.url || !lib) return;
 
       const container = this.$refs.documentContainer;
       if (!container) return;
 
-      const pages = container.querySelectorAll('.pdf-page-container');
-      pages.forEach(page => page.remove());
-
-      await new Promise(resolve => setTimeout(resolve, 400));
-
       container.classList.add('pdf-loading');
 
       try {
-        const loadingTask = this.pdfjsLib.getDocument(this.documentUrl);
+        const loadingTask = lib.getDocument(doc.url);
         const pdf = await loadingTask.promise;
         this.totalPages = pdf.numPages;
 
@@ -269,63 +369,45 @@ ${text.substring(0, 15000)}`;
           const unscaledViewport = page.getViewport({ scale: 1.0 });
           const scale = containerWidth / unscaledViewport.width;
           const viewport = page.getViewport({ scale });
-          
+
           const pageContainer = document.createElement('div');
           pageContainer.classList.add('pdf-page-container');
           pageContainer.style.position = 'relative';
-          
+
           const canvas = document.createElement('canvas');
           canvas.width = viewport.width;
           canvas.height = viewport.height;
           canvas.classList.add('pdf-page');
-          canvas.style.animation = "fadeInEffect 0.5s ease";
-          
-          const context = canvas.getContext('2d');
+          canvas.style.animation = 'fadeInEffect 0.5s ease';
+
           const renderContext = {
-            canvasContext: context,
-            viewport: viewport
+            canvasContext: canvas.getContext('2d'),
+            viewport
           };
           await page.render(renderContext).promise;
-          
-          const overlay = document.createElement('canvas');
-          overlay.width = viewport.width;
-          overlay.height = viewport.height;
-          overlay.classList.add('overlay-canvas');
-          overlay.style.position = 'absolute';
-          overlay.style.top = '0';
-          overlay.style.left = '0';
-          overlay.style.pointerEvents = 'none';
-          overlay.style.background = 'transparent';
-          const overlayCtx = overlay.getContext('2d');
-          this.drawHeatmap(viewport, overlayCtx);
-          
+
           pageContainer.appendChild(canvas);
-          pageContainer.appendChild(overlay);
           container.appendChild(pageContainer);
         }
       } finally {
         container.classList.remove('pdf-loading');
       }
     },
-    drawHeatmap(viewport, ctx) {
-      ctx.clearRect(0, 0, viewport.width, viewport.height);
-      ctx.fillStyle = "rgba(255, 0, 0, 0.3)";
-      ctx.fillRect(50, 50, 100, 40);
-      ctx.fillStyle = "rgba(255, 255, 0, 0.3)";
-      ctx.fillRect(200, 100, 80, 30);
-      ctx.fillStyle = "rgba(0, 255, 0, 0.3)";
-      ctx.fillRect(150, 200, 120, 50);
-    },
     toggleAssistant() {
-      this.$emit('show-assistant'); 
+      this.$emit('show-assistant');
     },
 
     async updatePdfSize() {
+      if (!this.selectedDocument || this.selectedDocument.type !== 'pdf') return;
       this.resizing = true;
       try {
         await this.$nextTick();
-        await new Promise(resolve => setTimeout(resolve, 10));
-        await this.renderPDF();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        const container = this.$refs.documentContainer;
+        if (container) {
+          container.querySelectorAll('.pdf-page-container').forEach((el) => el.remove());
+        }
+        await this.renderPDF(this.selectedDocument);
       } catch (error) {
         console.error('Error updating PDF size:', error);
       } finally {
@@ -334,27 +416,17 @@ ${text.substring(0, 15000)}`;
     }
   },
   watch: {
-    documentUrl(newVal, oldVal) {
-      // Игнорируем холостой вызов при инициализации (oldVal === undefined)
-      if (newVal && oldVal === undefined) return;
-      if (newVal && this.pdfjsLib) {
-        // Сбрасываем предыдущий результат и запускаем анализ
-        this.analysisResult = null;
-        this.analysisError = false;
-        this.renderPDF();
-        this.extractPdfText();
-      }
-    }
-  },
-  async mounted() {
-    if (this.documentUrl) {
-      const pdfLibUrl = '/pdfjs/legacy/build/pdf.mjs';
-      this.pdfjsLib = await import(/* webpackIgnore: true */ /* @vite-ignore */ pdfLibUrl);
-      this.pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdfjs/legacy/build/pdf.worker.mjs';
-      // Первый запуск без дублирования
-      if (!this.analysisInProgress) {
-        this.renderPDF();
-        this.extractPdfText();
+    'selectedDocument.id': {
+      immediate: true,
+      async handler(newId) {
+        if (!newId) {
+          this.renderedDocId = null;
+          this.totalPages = 0;
+          return;
+        }
+        await this.$nextTick();
+        await this.renderSelectedDocument();
+        await this.runAnalysisForSelected();
       }
     }
   },
@@ -431,12 +503,50 @@ ${text.substring(0, 15000)}`;
   max-width: 100%;
   transition: all 0.3s ease;
 }
-.overlay-canvas {
-  position: absolute;
-  top: 0;
-  left: 0;
-  pointer-events: none;
-  background: transparent;
+
+.docx-preview {
+  padding: 20px 28px;
+  font-family: 'PT Sans', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #222;
+  user-select: text;
+}
+
+.docx-preview :deep(h1),
+.docx-preview :deep(h2),
+.docx-preview :deep(h3) {
+  margin: 1.2em 0 0.5em;
+  font-weight: 600;
+}
+
+.docx-preview :deep(p) {
+  margin: 0.6em 0;
+}
+
+.docx-preview :deep(table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0;
+}
+
+.docx-preview :deep(td),
+.docx-preview :deep(th) {
+  border: 1px solid #d9d9d9;
+  padding: 6px 10px;
+}
+
+.docx-preview :deep(img) {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 1em auto;
+}
+
+.docx-preview :deep(ul),
+.docx-preview :deep(ol) {
+  padding-left: 1.5em;
+  margin: 0.6em 0;
 }
 .content__panel {
   width: 200px;
@@ -661,6 +771,7 @@ ${text.substring(0, 15000)}`;
 }
 
 .file-selector {
+  position: relative;
   width: 200px;
   height: 25px;
   border: 1px solid #e6e6e6;
@@ -672,9 +783,70 @@ ${text.substring(0, 15000)}`;
   justify-content: space-between;
 }
 
+.file-selector--disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.file-selector--open .file-selector__icon {
+  transform: rotate(180deg);
+}
+
 .file-selector__icon {
   width: 8px;
   height: 8px;
+  transition: transform 0.2s ease;
+}
+
+.file-selector__dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  width: 100%;
+  max-height: 200px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid #e6e6e6;
+  border-radius: 10px;
+  padding: 4px;
+  margin: 0;
+  list-style: none;
+  z-index: 20;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.file-selector__item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 8px;
+  gap: 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #333;
+}
+
+.file-selector__item:hover {
+  background-color: #f3f3f3;
+}
+
+.file-selector__item--active {
+  background-color: rgba(108, 103, 253, 0.1);
+  color: #6c67fd;
+  font-weight: 600;
+}
+
+.file-selector__item-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-selector__item-type {
+  font-size: 10px;
+  color: #a2a2a2;
+  font-weight: 600;
 }
 
 .file {

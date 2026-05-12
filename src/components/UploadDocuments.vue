@@ -3,7 +3,7 @@
     <transition name="slide-left">
       <div v-if="!collapsed" class="upload-documents">
         <p class="upload-documents__description">
-          Убедитесь, что ваши документы находятся в поддерживаемых форматах (<strong class="upload-documents__format">PDF</strong>, <strong class="upload-documents__format">DOC</strong>, <strong class="upload-documents__format">DOCX</strong>). 
+          Убедитесь, что ваши документы находятся в поддерживаемых форматах (<strong class="upload-documents__format">PDF</strong>, <strong class="upload-documents__format">DOCX</strong>).
           Перетащите выбранные файлы в область ниже или кликните на неё, чтобы открыть стандартное окно выбора. 
           Вы можете загрузить один или несколько файлов.
         </p>
@@ -24,23 +24,26 @@
         </div>
 
         <h3 class="upload-documents__title">Загруженные документы:</h3>
+        <p v-if="rejectedFormatWarning" class="upload-documents__reject-warning">
+          {{ rejectedFormatWarning }}
+        </p>
         <div v-if="files.length === 0" class="upload-documents__empty">
           Загрузите файлы в поле выше для просмотра
         </div>
         <div v-else class="upload-documents__file-list">
           <ul class="upload-file-list">
-            <li v-for="(file, index) in files" :key="index" class="upload-documents__file-item">
+            <li v-for="item in files" :key="item.id" class="upload-documents__file-item">
               <div class="upload-documents__file-info">
-                <img :src="getFileIcon(file)" alt="" class="upload-documents__file-icon" />
-                <span class="upload-documents__file-name">{{ truncateFileName(file.name) }}</span>
+                <img :src="getFileIcon(item)" alt="" class="upload-documents__file-icon" />
+                <span class="upload-documents__file-name">{{ truncateFileName(item.name) }}</span>
               </div>
               <div class="upload-documents__file-details">
-                <span class="upload-documents__file-size">{{ formatFileSize(file.size) }}</span>
-                <img 
-                  src="@/assets/trash.svg" 
-                  alt="Удалить" 
-                  class="upload-documents__file-delete" 
-                  @click="removeFile(index)" 
+                <span class="upload-documents__file-size">{{ formatFileSize(item.file?.size || 0) }}</span>
+                <img
+                  src="@/assets/trash.svg"
+                  alt="Удалить"
+                  class="upload-documents__file-delete"
+                  @click="removeFile(item.id)"
                 />
               </div>
             </li>
@@ -89,30 +92,30 @@
           ref="fileInput" 
           @change="handleFileSelect" 
           multiple 
-          accept=".pdf,.doc,.docx" 
+          accept=".pdf,.docx"
           style="display: none"
         />
         
        
-        <div 
-          v-for="(file, index) in files" 
-          :key="index" 
+        <div
+          v-for="item in files"
+          :key="item.id"
           class="small-menu__file"
-          @mouseenter="showTooltip(index)"
+          @mouseenter="showTooltip(item.id)"
           @mouseleave="hideTooltip">
-          <img :src="getFileIcon(file)" class="small-menu__file-icon" />
-          
+          <img :src="getFileIcon(item)" class="small-menu__file-icon" />
+
           <transition name="fade">
-            <div 
-              v-if="activeTooltip === index" 
+            <div
+              v-if="activeTooltip === item.id"
               class="small-menu__tooltip"
               @mouseenter="keepTooltipVisible"
               @mouseleave="hideTooltip">
-              <span class="small-menu__tooltip-text">{{ truncateFileName(file.name, 20) }}</span>
-              <img 
-                src="@/assets/trash_white.png" 
-                class="small-menu__tooltip-delete" 
-                @click.stop="removeFile(index)"
+              <span class="small-menu__tooltip-text">{{ truncateFileName(item.name, 20) }}</span>
+              <img
+                src="@/assets/trash_white.png"
+                class="small-menu__tooltip-delete"
+                @click.stop="removeFile(item.id)"
               />
             </div>
           </transition>
@@ -135,16 +138,20 @@
 
 <script>
 import DropMenu from '@/components/DropMenu.vue'
-import UploadFilesList from '@/components/UploadFilesList.vue' 
+import UploadFilesList from '@/components/UploadFilesList.vue'
+import { mapStores } from 'pinia'
+import { useDocumentsStore, resolveFileType, DOCUMENT_STATUS } from '@/stores/documents'
 
 import pdfIcon from '@/assets/pdf.png'
 import docIcon from '@/assets/doc.png'
 
+const REJECTED_WARNING_TIMEOUT = 4000
+
 export default {
   name: 'UploadDocuments',
-  components: { 
+  components: {
     DropMenu,
-    UploadFilesList 
+    UploadFilesList
   },
   props: {
     collapsed: {
@@ -162,20 +169,21 @@ export default {
   },
   data() {
     return {
-      files: [],
       agreed: false,
-      processedCount: 0,
       showFileList: false,
       activeTooltip: null,
-      tooltipTimeout: null
+      tooltipTimeout: null,
+      rejectedFormatWarning: '',
+      rejectedWarningTimer: null
     }
   },
   computed: {
-    totalCost() {
-      return this.files.length
+    ...mapStores(useDocumentsStore),
+    files() {
+      return this.documentsStore.items
     },
     availableFiles() {
-      return this.files.length - this.processedCount
+      return this.files.filter((item) => item.status === DOCUMENT_STATUS.IDLE).length
     }
   },
   methods: {
@@ -186,9 +194,9 @@ export default {
     clearTimeout(this.tooltipTimeout);
   },
 
-  showTooltip(index) {
+  showTooltip(id) {
     clearTimeout(this.tooltipTimeout);
-    this.activeTooltip = index;
+    this.activeTooltip = id;
   },
 
 
@@ -235,44 +243,52 @@ export default {
       }
     },
     onFilesAdded(newFiles) {
-      const allowedExtensions = ['pdf', 'doc', 'docx'];
-      const filteredFiles = newFiles.filter(file => {
-        const ext = file.name.split('.').pop().toLowerCase();
-        return allowedExtensions.includes(ext);
+      const rejected = [];
+      newFiles.forEach((file) => {
+        const added = this.documentsStore.addFile(file);
+        if (!added) rejected.push(file.name);
       });
-      this.files.push(...filteredFiles);
+      if (rejected.length > 0) {
+        const hasDoc = rejected.some((name) => name.toLowerCase().endsWith('.doc'));
+        this.showRejectedWarning(
+          hasDoc
+            ? 'Формат .doc не поддерживается. Пересохраните файл как .docx.'
+            : `Поддерживаются только PDF и DOCX. Отклонены: ${rejected.join(', ')}`
+        );
+      }
     },
-    getFileIcon(file) {
-  const ext = file.name.split('.').pop().toLowerCase();
-  if (ext === 'pdf') return pdfIcon;
-  if (ext === 'doc' || ext === 'docx') return docIcon;
-},
+    showRejectedWarning(message) {
+      this.rejectedFormatWarning = message;
+      clearTimeout(this.rejectedWarningTimer);
+      this.rejectedWarningTimer = setTimeout(() => {
+        this.rejectedFormatWarning = '';
+      }, REJECTED_WARNING_TIMEOUT);
+    },
+    getFileIcon(item) {
+      const type = item.type || resolveFileType(item.name || '');
+      if (type === 'pdf') return pdfIcon;
+      if (type === 'docx') return docIcon;
+      return docIcon;
+    },
     formatFileSize(size) {
-      if (size < 1024) {
-        return size + ' B';
-      } else if (size < 1024 * 1024) {
-        return (size / 1024).toFixed(1) + ' KB';
-      } else {
-        return (size / (1024 * 1024)).toFixed(1) + ' MB';
-      }
+      if (size < 1024) return size + ' B';
+      if (size < 1024 * 1024) return (size / 1024).toFixed(1) + ' KB';
+      return (size / (1024 * 1024)).toFixed(1) + ' MB';
     },
-    removeFile(index) {
-      this.files.splice(index, 1);
-      if (this.processedCount > this.files.length) {
-        this.processedCount = this.files.length;
-      }
+    removeFile(id) {
+      this.documentsStore.remove(id);
     },
     truncateFileName(name, maxLength = 30) {
-    return name.length > maxLength ? name.slice(0, maxLength) + '..' : name;
-  },
+      return name.length > maxLength ? name.slice(0, maxLength) + '..' : name;
+    },
     startProcessing() {
       if (!this.agreed || this.processing || this.availableFiles === 0) return;
       this.$emit('processing-started');
-      if (this.files.length > 0 && this.availableFiles > 0) {
-        this.$emit('document-uploaded', this.files[this.processedCount]);
-        this.processedCount++;
-      }
     }
+  },
+  beforeUnmount() {
+    clearTimeout(this.rejectedWarningTimer);
+    clearTimeout(this.tooltipTimeout);
   }
 }
 </script>
@@ -347,6 +363,15 @@ export default {
   padding-bottom: 10px;
 }
 .upload-documents__empty {
+  margin-bottom: 10px;
+}
+.upload-documents__reject-warning {
+  font-size: 12px;
+  color: #d12c2c;
+  padding: 8px 10px;
+  background: rgba(209, 44, 44, 0.08);
+  border: 1px solid rgba(209, 44, 44, 0.3);
+  border-radius: 8px;
   margin-bottom: 10px;
 }
 .upload-documents__file-list {
