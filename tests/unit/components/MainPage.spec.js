@@ -7,7 +7,10 @@ vi.mock('@/components/AnalysisResult.vue', () => ({
     name: 'AnalysisResult',
     template: '<div class="mock-analysis">Mock AnalysisResult</div>',
     props: ['documentUrl', 'documentName', 'expanded'],
-    emits: ['analysis-complete', 'show-assistant']
+    emits: ['analysis-complete', 'show-assistant'],
+    methods: {
+      updatePdfSize() {}
+    }
   }
 }))
 

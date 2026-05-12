@@ -30,3 +30,7 @@ coverage
 playwright-report
 test-results
 .playwright
+.playwright-mcp
+
+# Локальные служебные директории инструментов (контекст планов, кеши агентов)
+.claude
