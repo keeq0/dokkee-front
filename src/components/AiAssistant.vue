@@ -165,7 +165,7 @@
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import MarkdownIt from 'markdown-it';
-import axios from 'axios';
+import { chatCompletion } from '@/services/deepseek';
 
 export default {
   name: 'AiAssistant',
@@ -471,23 +471,11 @@ export default {
           { role: 'user', content: text }
         ];
 
-        const response = await axios.post(
-          'https://api.deepseek.com/chat/completions',
-          {
-            model: 'deepseek-chat',
-            messages: messagesForApi,
-            temperature: 0.7,
-            max_tokens: 2000
-          },
-          {
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer sk-95a2138d9dc74827b0c1944a0839dadc'
-            }
-          }
-        );
-
-        const answer = response.data.choices[0].message.content;
+        const answer = await chatCompletion({
+          messages: messagesForApi,
+          temperature: 0.7,
+          maxTokens: 2000
+        });
         const assistantMsg = { role: 'assistant', content: answer };
         this.chatMessages = [...this.chatMessages, assistantMsg];
         this.chatHistoryKey++;
