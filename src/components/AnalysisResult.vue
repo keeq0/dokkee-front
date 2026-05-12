@@ -17,11 +17,13 @@
       <div class="analysis__progress">
         <div class="progress__info">
           <img src="@/assets/ai.svg" class="progress__info-icon" />
-          <p class="progress__status">Читаю файл..</p>
+          <p class="progress__status">{{ progressStatusText }}</p>
         </div>
         <div class="progress__bar">
-          <div class="bar"></div>
-          <p class="bar__percentage">0%</p>
+          <div class="bar">
+            <div class="bar__fill" :style="{ width: progressPercent + '%' }"></div>
+          </div>
+          <p class="bar__percentage">{{ progressPercent }}%</p>
         </div>
       </div>
     </div>
@@ -53,20 +55,22 @@
           </li>
         </ul>
         <div class="ai-assistant__block">
-          <button class="panel__button ai-assistant" @click="toggleAssistant">
-          <img src="@/assets/ai_white.svg" class="button__icon" alt=""/> 
-          <p>ИИ-помощник</p>
-        </button>
+          <button
+            class="panel__button ai-assistant"
+            :disabled="!analysisComplete"
+            @click="toggleAssistant">
+            <img src="@/assets/ai_white.svg" class="button__icon" alt=""/>
+            <p>ИИ-помощник</p>
+          </button>
         </div>
-        
+
         <div class="help-buttons__block">
-           <button class="panel__button save">
+          <button class="panel__button save" :disabled="!analysisComplete">
             <p>Сохранить</p>
-            </button>
-        <button class="panel__button save">
-           
-          <p>Скачать отчёт</p>
-        </button>
+          </button>
+          <button class="panel__button save" :disabled="!analysisComplete">
+            <p>Скачать отчёт</p>
+          </button>
         </div>
         <div class="risk-panel">
 
@@ -115,6 +119,21 @@ export default {
       return this.documentName && this.documentName.length > 15
         ? this.documentName.slice(0, 15) + '..'
         : this.documentName;
+    },
+    hasDocument() {
+      return Boolean(this.documentUrl);
+    },
+    analysisComplete() {
+      return this.analysisResult !== null && !this.analysisError && !this.analysisInProgress;
+    },
+    progressPercent() {
+      return this.analysisComplete ? 100 : 0;
+    },
+    progressStatusText() {
+      if (this.analysisInProgress) return 'Читаю файл..';
+      if (this.analysisError) return 'Ошибка анализа';
+      if (this.analysisComplete) return 'Анализ завершён';
+      return 'Загрузите документ(-ы) для начала работы';
     }
   },
   methods: {
@@ -329,7 +348,8 @@ ${text.substring(0, 15000)}`;
   },
   async mounted() {
     if (this.documentUrl) {
-      this.pdfjsLib = await import(/* webpackIgnore: true */ '/pdfjs/legacy/build/pdf.mjs');
+      const pdfLibUrl = '/pdfjs/legacy/build/pdf.mjs';
+      this.pdfjsLib = await import(/* webpackIgnore: true */ /* @vite-ignore */ pdfLibUrl);
       this.pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdfjs/legacy/build/pdf.worker.mjs';
       // Первый запуск без дублирования
       if (!this.analysisInProgress) {
@@ -471,6 +491,12 @@ ${text.substring(0, 15000)}`;
   justify-content: center;
   gap: 5px;
   transition: all 0.3s ease;
+}
+
+.panel__button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .help-buttons__block {
@@ -676,30 +702,28 @@ ${text.substring(0, 15000)}`;
 
 .analysis__progress {
   width: 300px;
-  height: 30px;
+  min-height: 30px;
   border: 1px solid #e6e6e6;
-  border-radius: 50px;
+  border-radius: 16px;
   display: flex;
-  align-items: center;
+  align-items: stretch;
 }
 
 .progress__info {
-  width: 50%;
-  height: 30px;
+  width: 60%;
   display: flex;
   align-items: center;
   gap: 6px;
   border-right: 1px solid #e6e6e6;
-  padding: 0 8px;
+  padding: 4px 8px;
 }
 
 .progress__bar {
-  width: 50%;
-  height: 30px;
+  width: 40%;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 10px;
+  gap: 8px;
+  padding: 4px 10px;
 }
 
 .bar {
@@ -707,6 +731,15 @@ ${text.substring(0, 15000)}`;
   height: 10px;
   background-color: #d9d9d9;
   border-radius: 50px;
+  overflow: hidden;
+}
+
+.bar__fill {
+  height: 100%;
+  width: 0;
+  background-color: #4caf50;
+  border-radius: 50px;
+  transition: width 0.3s ease;
 }
 
 .bar__percentage {
@@ -720,8 +753,9 @@ ${text.substring(0, 15000)}`;
 }
 
 .progress__status {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
+  line-height: 1.25;
 }
 
 .risk-panel {

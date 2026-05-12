@@ -21,8 +21,7 @@
           @document-uploaded="handleDocumentUploaded" />
       </div>
       <div class="analysis-container" :class="{ 'expanded': uploadDocumentsCollapsed }">
-          <AnalysisResult 
-            v-if="showAnalysis" 
+          <AnalysisResult
              ref="analysisResult"
             :expanded="uploadDocumentsCollapsed"
             :documentUrl="uploadedDocumentUrl"
@@ -58,7 +57,6 @@ export default {
       processing: false,
       showAssistant: false,
       assistantVisible: false,
-      showAnalysis: false,
       uploadedDocumentUrl: '',
       uploadedDocumentName: '',
       analysisData: {
@@ -102,16 +100,13 @@ export default {
       this.processing = true;
       setTimeout(() => {
         this.activateAssistant();
-        this.assistantVisible = false; 
+        this.assistantVisible = false;
         this.$nextTick(() => {
           setTimeout(() => {
             this.assistantVisible = true;
           }, 50);
         });
       }, 1000);
-      setTimeout(() => {
-        this.showAnalysis = true;
-      }, 2500);
     },
     handleProcessingComplete() {
       this.processing = false;
