@@ -12,40 +12,39 @@
     </div>
     <div class="main-page__content">
       <div class="upload-documents-container" :class="{ 'collapsed': uploadDocumentsCollapsed }">
-        <UploadDocuments 
-         @update-pdf="handlePdfUpdate"
+        <UploadDocuments
+          @update-pdf="handlePdfUpdate"
           :collapsed="uploadDocumentsCollapsed"
           @toggle-menu="uploadDocumentsCollapsed = false"
-          :processing="processing" 
-          @processing-started="handleProcessingStarted" 
-          @document-uploaded="handleDocumentUploaded" />
+          :processing="processing"
+          @processing-started="handleProcessingStarted" />
       </div>
       <div class="analysis-container" :class="{ 'expanded': uploadDocumentsCollapsed }">
-          <AnalysisResult
-             ref="analysisResult"
-            :expanded="uploadDocumentsCollapsed"
-            :documentUrl="uploadedDocumentUrl"
-            :documentName="uploadedDocumentName"
-            @analysis-complete="handleAnalysisComplete"
-            @show-assistant="activateAssistant" />
-        </div>
-      
-      <AiAssistant 
+        <AnalysisResult
+          ref="analysisResult"
+          :expanded="uploadDocumentsCollapsed"
+          @analysis-complete="handleAnalysisComplete"
+          @show-assistant="activateAssistant" />
+      </div>
+
+      <AiAssistant
         v-if="showAssistant"
         ref="assistantRef"
-        :visible="assistantVisible" 
+        :visible="assistantVisible"
         @close="hideAssistant"
         @processing-complete="handleProcessingComplete"
-        :analysisResult="analysisData.result"
-        :analysisError="analysisData.error" />
+        :analysisResult="analysisResult"
+        :analysisError="analysisError" />
     </div>
   </div>
 </template>
 
 <script>
+import { mapStores } from 'pinia';
 import AiAssistant from '@/components/AiAssistant.vue';
 import AnalysisResult from '@/components/AnalysisResult.vue';
 import UploadDocuments from '@/components/UploadDocuments.vue';
+import { useDocumentsStore } from '@/stores/documents';
 
 export default {
   name: 'MainPage',
@@ -56,13 +55,16 @@ export default {
       showUploadDocuments: true,
       processing: false,
       showAssistant: false,
-      assistantVisible: false,
-      uploadedDocumentUrl: '',
-      uploadedDocumentName: '',
-      analysisData: {
-        result: null,
-        error: false
-      }
+      assistantVisible: false
+    }
+  },
+  computed: {
+    ...mapStores(useDocumentsStore),
+    analysisResult() {
+      return this.documentsStore.selected?.analysisResult ?? null;
+    },
+    analysisError() {
+      return this.documentsStore.selected?.analysisError ?? false;
     }
   },
   methods: {
@@ -81,8 +83,7 @@ export default {
       }
     });
   },
-    handleAnalysisComplete(data) {
-      this.analysisData = data;
+    handleAnalysisComplete() {
       if (this.showAssistant) {
         this.assistantVisible = true;
       }
@@ -110,10 +111,6 @@ export default {
     },
     handleProcessingComplete() {
       this.processing = false;
-    },
-    handleDocumentUploaded(file) {
-      this.uploadedDocumentUrl = URL.createObjectURL(file);
-      this.uploadedDocumentName = file.name;
     },
 
     hideAssistant() {

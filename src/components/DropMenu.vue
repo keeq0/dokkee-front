@@ -29,6 +29,7 @@
       ref="fileInput"
       type="file"
       multiple
+      accept=".pdf,.docx"
       @change="onFileInputChange"
       style="display: none;"
     />
