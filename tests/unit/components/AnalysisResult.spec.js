@@ -118,3 +118,63 @@ describe('AnalysisResult — состояние с документами', () =
     expect(wrapper.find('.progress__status').text()).toBe('Ошибка анализа')
   })
 })
+
+describe('AnalysisResult — размер текста', () => {
+  it('по умолчанию 100% и popover закрыт', () => {
+    const { wrapper } = mountAnalysis()
+    expect(wrapper.find('.font-size-selector__size').text()).toBe('100%')
+    expect(wrapper.find('.font-size-popover').exists()).toBe(false)
+  })
+
+  it('клик по селектору открывает popover; повторный клик закрывает', async () => {
+    const { wrapper } = mountAnalysis()
+    await wrapper.find('.analysis__font-size-selector').trigger('click')
+    expect(wrapper.find('.font-size-popover').exists()).toBe(true)
+    expect(wrapper.find('.font-size-popover__slider').exists()).toBe(true)
+    expect(wrapper.find('.font-size-popover__input').exists()).toBe(true)
+    await wrapper.find('.analysis__font-size-selector').trigger('click')
+    expect(wrapper.find('.font-size-popover').exists()).toBe(false)
+  })
+
+  it('slider обновляет процент и CSS-переменную --preview-font-scale', async () => {
+    const { wrapper } = mountAnalysis()
+    await wrapper.find('.analysis__font-size-selector').trigger('click')
+    const slider = wrapper.find('.font-size-popover__slider')
+    await slider.setValue('150')
+    expect(wrapper.vm.fontScalePercent).toBe(150)
+    expect(wrapper.find('.font-size-selector__size').text()).toBe('150%')
+    const container = wrapper.find('.content__document')
+    expect(container.attributes('style')).toContain('--preview-font-scale: 1.5')
+  })
+
+  it('text-input синхронизирован со slider и зажимает значение в [50, 200]', async () => {
+    const { wrapper } = mountAnalysis()
+    await wrapper.find('.analysis__font-size-selector').trigger('click')
+    const input = wrapper.find('.font-size-popover__input')
+    await input.setValue('20')
+    expect(wrapper.vm.fontScalePercent).toBe(50)
+    await input.setValue('999')
+    expect(wrapper.vm.fontScalePercent).toBe(200)
+    await input.setValue('120')
+    expect(wrapper.vm.fontScalePercent).toBe(120)
+  })
+
+  it('кнопка Сброс возвращает значение к 100% и сама дизейблится', async () => {
+    const { wrapper } = mountAnalysis()
+    await wrapper.find('.analysis__font-size-selector').trigger('click')
+    await wrapper.find('.font-size-popover__slider').setValue('150')
+    expect(wrapper.find('.font-size-popover__reset').attributes('disabled')).toBeUndefined()
+    await wrapper.find('.font-size-popover__reset').trigger('click')
+    expect(wrapper.vm.fontScalePercent).toBe(100)
+    expect(wrapper.find('.font-size-popover__reset').attributes('disabled')).toBeDefined()
+  })
+
+  it('клик вне селектора закрывает popover', async () => {
+    const { wrapper } = mountAnalysis()
+    await wrapper.find('.analysis__font-size-selector').trigger('click')
+    expect(wrapper.find('.font-size-popover').exists()).toBe(true)
+    document.body.click()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.font-size-popover').exists()).toBe(false)
+  })
+})
