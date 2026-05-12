@@ -99,6 +99,11 @@ export default {
 
     handleProcessingStarted() {
       this.processing = true;
+      this.$nextTick(() => {
+        if (this.$refs.analysisResult?.startAnalysisForAll) {
+          this.$refs.analysisResult.startAnalysisForAll();
+        }
+      });
       setTimeout(() => {
         this.activateAssistant();
         this.assistantVisible = false;
