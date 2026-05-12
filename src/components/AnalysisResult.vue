@@ -77,7 +77,7 @@
 </template>
 
 <script>
-import axios from 'axios';
+import { chatCompletion, DEEPSEEK_MODELS } from '@/services/deepseek';
 
 export default {
   name: 'AnalysisResult',
@@ -179,39 +179,24 @@ export default {
 ${text.substring(0, 15000)}`;
 
       try {
-        console.log('Отправка запроса к Deepseek API...');
-        const response = await axios.post(
-          'https://api.deepseek.com/chat/completions',
-          {
-            messages: [
-              { content: "You are a professional document analyst. Always respond in Russian, following the exact formatting instructions.", role: "system" },
-              { content: prompt, role: "user" }
-            ],
-            model: "deepseek-reasoner",
-            max_tokens: 8000,
-            max_cot_tokens: 8000,
-            temperature: 1.0,
-            top_p: 0.7,
-          },
-          {
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer sk-95a2138d9dc74827b0c1944a0839dadc'
-            },
-            signal: this.abortController.signal
-          }
-        );
-        
-        console.log('Ответ от Deepseek API:', response.data);
-
-        this.analysisResult = response.data.choices[0].message.content;
+        this.analysisResult = await chatCompletion({
+          model: DEEPSEEK_MODELS.REASONER,
+          messages: [
+            { role: 'system', content: 'You are a professional document analyst. Always respond in Russian, following the exact formatting instructions.' },
+            { role: 'user', content: prompt }
+          ],
+          temperature: 1.0,
+          topP: 0.7,
+          maxTokens: 8000,
+          extra: { max_cot_tokens: 8000 },
+          signal: this.abortController.signal
+        });
         this.analysisError = false;
       } catch (error) {
-        if (axios.isCancel(error)) {
-          console.log('Запрос отменён');
+        if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') {
           return;
         }
-        console.error('Ошибка при анализе документа:', error);
+        console.error('Ошибка при анализе документа:', error?.message || error);
         this.analysisResult = null;
         this.analysisError = true;
       } finally {
