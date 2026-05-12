@@ -48,7 +48,7 @@ export default {
 }
 </script>
 
-<style>
+<style scoped>
 .analysis {
   display: flex;
   gap: 30px;

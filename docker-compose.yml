@@ -5,7 +5,7 @@ services:
       target: dev
     container_name: dokkee-frontend
     ports:
-      - "8085:8080"
+      - "8080:8080"
     volumes:
       - ./src:/app/src
       - ./public:/app/public
