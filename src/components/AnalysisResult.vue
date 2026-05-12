@@ -23,9 +23,50 @@
           </ul>
         </div>
       </div>
-      <div class="analysis__font-size-selector">
-        <p class="font-size-selector__size">16px</p>
+      <div
+        class="analysis__font-size-selector"
+        :class="{ 'font-size-selector--open': fontSizeOpen }"
+        @click="toggleFontSize"
+        ref="fontSizeRoot">
+        <p class="font-size-selector__size">{{ fontScalePercent }}%</p>
         <img src="@/assets/black-arrow.png" class="file-selector__icon" />
+        <div v-if="fontSizeOpen" class="font-size-popover" @click.stop>
+          <label class="font-size-popover__label" for="font-size-input">Размер текста</label>
+          <div class="font-size-popover__controls">
+            <input
+              id="font-size-input"
+              type="number"
+              class="font-size-popover__input"
+              :min="fontScaleMin"
+              :max="fontScaleMax"
+              step="1"
+              :value="fontScalePercent"
+              @input="onFontScaleInput"
+              @blur="commitFontScale"
+              @keydown.enter="commitFontScale" />
+            <span class="font-size-popover__unit">%</span>
+            <button
+              type="button"
+              class="font-size-popover__reset"
+              :disabled="fontScalePercent === 100"
+              @click="resetFontScale">
+              Сброс
+            </button>
+          </div>
+          <input
+            type="range"
+            class="font-size-popover__slider"
+            :min="fontScaleMin"
+            :max="fontScaleMax"
+            step="1"
+            :value="fontScalePercent"
+            @input="onFontScaleInput" />
+          <div class="font-size-popover__legend">
+            <span>{{ fontScaleMin }}%</span>
+            <span>100%</span>
+            <span>{{ fontScaleMax }}%</span>
+          </div>
+        </div>
       </div>
       </div>
       <div class="analysis__progress">
@@ -61,7 +102,10 @@
     </div>
     <div class="analysis__content">
 
-      <div class="content__document" ref="documentContainer">
+      <div
+        class="content__document"
+        ref="documentContainer"
+        :style="{ '--preview-font-scale': fontScale }">
         <div v-if="resizing" class="pdf-loading-overlay">
           <div class="pdf-loading-dots">
             <div class="pdf-loading-dot"></div>
@@ -141,9 +185,14 @@ export default {
       maxZoom: 3,
       resizing: false,
       fileSelectorOpen: false,
+      fontSizeOpen: false,
+      fontScalePercent: 100,
+      fontScaleMin: 50,
+      fontScaleMax: 200,
       renderedDocId: null,
       analysisControllers: new Map(),
-      emulators: new Map()
+      emulators: new Map(),
+      onDocumentClick: null
     };
   },
   computed: {
@@ -204,18 +253,51 @@ export default {
         progress: doc.status === DOCUMENT_STATUS.DONE ? 100 : doc.progress || 0,
         isSelected: this.selectedDocument?.id === doc.id
       }));
+    },
+    fontScale() {
+      return this.fontScalePercent / 100;
     }
   },
   methods: {
     openFileSelector() {
       if (this.documents.length > 0) {
         this.fileSelectorOpen = !this.fileSelectorOpen;
+        if (this.fileSelectorOpen) this.fontSizeOpen = false;
       }
     },
     selectDocument(id) {
       this.fileSelectorOpen = false;
       if (id === this.documentsStore.selectedId) return;
       this.documentsStore.select(id);
+    },
+    toggleFontSize() {
+      this.fontSizeOpen = !this.fontSizeOpen;
+      if (this.fontSizeOpen) this.fileSelectorOpen = false;
+    },
+    clampFontScale(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return this.fontScalePercent;
+      return Math.max(this.fontScaleMin, Math.min(this.fontScaleMax, Math.round(n)));
+    },
+    onFontScaleInput(event) {
+      this.fontScalePercent = this.clampFontScale(event.target.value);
+    },
+    commitFontScale(event) {
+      this.fontScalePercent = this.clampFontScale(event.target.value);
+    },
+    resetFontScale() {
+      this.fontScalePercent = 100;
+    },
+    handleDocumentClick(event) {
+      if (this.fontSizeOpen && !this.$refs.fontSizeRoot?.contains(event.target)) {
+        this.fontSizeOpen = false;
+      }
+      if (this.fileSelectorOpen) {
+        const fileSelector = this.$el.querySelector?.('.file-selector');
+        if (fileSelector && !fileSelector.contains(event.target)) {
+          this.fileSelectorOpen = false;
+        }
+      }
     },
     async ensurePdfJs() {
       if (this.pdfjsLib) return this.pdfjsLib;
@@ -503,7 +585,15 @@ ${text.substring(0, 15000)}`;
       }
     }
   },
+  mounted() {
+    this.onDocumentClick = (event) => this.handleDocumentClick(event);
+    document.addEventListener('click', this.onDocumentClick);
+  },
   beforeUnmount() {
+    if (this.onDocumentClick) {
+      document.removeEventListener('click', this.onDocumentClick);
+      this.onDocumentClick = null;
+    }
     this.analysisControllers.forEach((controller) => controller.abort());
     this.analysisControllers.clear();
     this.emulators.forEach((emulator) => emulator.stop());
@@ -571,6 +661,9 @@ ${text.substring(0, 15000)}`;
 
 .pdf-page-container {
   margin-bottom: 10px;
+  transform: scale(var(--preview-font-scale, 1));
+  transform-origin: top center;
+  transition: transform 0.2s ease;
 }
 .pdf-page {
   width: 100%;
@@ -581,10 +674,11 @@ ${text.substring(0, 15000)}`;
 .docx-preview {
   padding: 20px 28px;
   font-family: 'PT Sans', sans-serif;
-  font-size: 14px;
+  font-size: calc(14px * var(--preview-font-scale, 1));
   line-height: 1.5;
   color: #222;
   user-select: text;
+  transition: font-size 0.2s ease;
 }
 
 .docx-preview :deep(h1),
@@ -930,7 +1024,8 @@ ${text.substring(0, 15000)}`;
 }
 
 .analysis__font-size-selector {
-  width: 65px;
+  position: relative;
+  width: 70px;
   height: 25px;
   border: 1px solid #e6e6e6;
   border-radius: 50px;
@@ -939,11 +1034,116 @@ ${text.substring(0, 15000)}`;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 4px;
+}
+
+.analysis__font-size-selector .file-selector__icon {
+  transition: transform 0.2s ease;
+}
+
+.font-size-selector--open .file-selector__icon {
+  transform: rotate(180deg);
 }
 
 .font-size-selector__size {
   font-size: 12px;
   font-weight: 500;
+  white-space: nowrap;
+}
+
+.font-size-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 220px;
+  background: #fff;
+  border: 1px solid #e6e6e6;
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.1);
+  z-index: 25;
+  cursor: default;
+}
+
+.font-size-popover__label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #6c67fd;
+  margin-bottom: 8px;
+}
+
+.font-size-popover__controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.font-size-popover__input {
+  width: 56px;
+  height: 26px;
+  padding: 4px 6px;
+  border: 1px solid #e6e6e6;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  outline: none;
+  text-align: center;
+}
+
+.font-size-popover__input:focus {
+  border-color: #6c67fd;
+}
+
+.font-size-popover__input::-webkit-outer-spin-button,
+.font-size-popover__input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.font-size-popover__unit {
+  font-size: 12px;
+  color: #6b6b6b;
+}
+
+.font-size-popover__reset {
+  margin-left: auto;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid #e6e6e6;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.font-size-popover__reset:hover:not(:disabled) {
+  background: #6c67fd;
+  color: #fff;
+  border-color: #6c67fd;
+}
+
+.font-size-popover__reset:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.font-size-popover__slider {
+  width: 100%;
+  margin: 0;
+  accent-color: #6c67fd;
+  cursor: pointer;
+}
+
+.font-size-popover__legend {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: #a2a2a2;
+  margin-top: 4px;
 }
 
 .analysis__progress {
