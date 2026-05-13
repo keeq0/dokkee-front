@@ -264,6 +264,7 @@ export default {
       recommendationsExpanded: false,
       riskPopoverPosition: null,
       isExporting: false,
+      fontScaleRerenderTimer: null,
       RISK_LEVEL,
       RISK_LEVEL_KEYS
     };
@@ -644,11 +645,12 @@ export default {
         this.totalPages = pdf.numPages;
 
         const containerWidth = container.clientWidth * 1;
-        
+        const fontScale = this.fontScale || 1;
+
         for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
           const page = await pdf.getPage(pageNumber);
           const unscaledViewport = page.getViewport({ scale: 1.0 });
-          const scale = containerWidth / unscaledViewport.width;
+          const scale = (containerWidth / unscaledViewport.width) * fontScale;
           const viewport = page.getViewport({ scale });
 
           const pageContainer = document.createElement('div');
@@ -728,6 +730,9 @@ export default {
           container.querySelectorAll('.pdf-page-container').forEach((el) => el.remove());
         }
         await this.renderPDF(this.selectedDocument);
+        if (this.risks.length > 0) {
+          this.applyRiskHighlights();
+        }
       } catch (error) {
         console.error('Error updating PDF size:', error);
       } finally {
@@ -736,6 +741,14 @@ export default {
     }
   },
   watch: {
+    fontScalePercent() {
+      if (this.selectedDocument?.type !== 'pdf') return;
+      if (this.fontScaleRerenderTimer) clearTimeout(this.fontScaleRerenderTimer);
+      this.fontScaleRerenderTimer = setTimeout(() => {
+        this.updatePdfSize();
+        this.fontScaleRerenderTimer = null;
+      }, 400);
+    },
     'selectedDocument.id': {
       immediate: true,
       async handler(newId) {
@@ -761,6 +774,10 @@ export default {
     if (this.onDocumentClick) {
       document.removeEventListener('click', this.onDocumentClick);
       this.onDocumentClick = null;
+    }
+    if (this.fontScaleRerenderTimer) {
+      clearTimeout(this.fontScaleRerenderTimer);
+      this.fontScaleRerenderTimer = null;
     }
     this.analysisControllers.forEach((controller) => controller.abort());
     this.analysisControllers.clear();
@@ -829,10 +846,6 @@ export default {
 
 .pdf-page-container {
   margin-bottom: 10px;
-  position: relative;
-  transform: scale(var(--preview-font-scale, 1));
-  transform-origin: top center;
-  transition: transform 0.2s ease;
 }
 
 .pdf-page {
