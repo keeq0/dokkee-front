@@ -108,24 +108,42 @@ export function buildAnalysisPrompt(text, { maxChars = 15000, options = [] } = {
   )
 }
 
-function extractJsonFromBlock(block) {
-  const trimmed = block.trim()
-  const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)
-  if (fence) return fence[1].trim()
-  return trimmed
+
+// Нормализация уровня - DeepSeek может вернуть в разном регистре или
+// с лишними словами. Подгоняем под канонические значения.
+function normalizeLevel(rawLevel) {
+  if (typeof rawLevel !== 'string') return ''
+  const s = rawLevel.trim().toLowerCase().replace(/[«»"'`]/g, '')
+  if (!s) return ''
+  if (RISK_LEVEL_KEYS[rawLevel.trim()]) return rawLevel.trim()
+  if (/больш|критич|высок|опасн|серьёз|серьез|red|danger|high/i.test(s)) return RISK_LEVEL.DANGER
+  if (/сомнит|средн|умерен|warn|medium|yellow/i.test(s)) return RISK_LEVEL.WARN
+  if (/хорош|низк|малозначим|допуст|good|low|green/i.test(s)) return RISK_LEVEL.GOOD
+  return ''
+}
+
+function pickField(raw, ...keys) {
+  for (const k of keys) {
+    if (raw[k] != null && raw[k] !== '') return raw[k]
+  }
+  return ''
 }
 
 function normalizeRisk(raw) {
   if (!raw || typeof raw !== 'object') return null
-  const level = typeof raw.level === 'string' ? raw.level.trim() : ''
+  // Принимаем синонимы для устойчивости к вариациям ответа DeepSeek.
+  const level = normalizeLevel(pickField(raw, 'level', 'severity', 'risk_level', 'category', 'type'))
   if (!RISK_LEVEL_KEYS[level]) return null
-  const name = String(raw.name ?? '').trim()
-  const section = String(raw.section ?? '').trim()
-  const quote = String(raw.quote ?? '').trim()
-  const comment = String(raw.comment ?? '').trim()
-  const recommendations = Array.isArray(raw.recommendations)
-    ? raw.recommendations.map((r) => String(r).trim()).filter(Boolean)
-    : []
+  const name = String(pickField(raw, 'name', 'title', 'header', 'risk', 'summary')).trim()
+  const section = String(pickField(raw, 'section', 'clause', 'item', 'paragraph', 'pt', 'p')).trim()
+  const quote = String(pickField(raw, 'quote', 'cite', 'citation', 'fragment', 'text', 'excerpt')).trim()
+  const comment = String(pickField(raw, 'comment', 'reason', 'explanation', 'description', 'detail', 'desc')).trim()
+  const recRaw = pickField(raw, 'recommendations', 'recommendation', 'recs', 'suggestions', 'fixes')
+  const recommendations = Array.isArray(recRaw)
+    ? recRaw.map((r) => String(r).trim()).filter(Boolean)
+    : (typeof recRaw === 'string' && recRaw)
+      ? [String(recRaw).trim()]
+      : []
   if (!name && !quote) return null
   return { level, name, section, quote, comment, recommendations, completed: false }
 }
@@ -158,34 +176,115 @@ function stripRisksLeftovers(text) {
 }
 
 /**
+ * Многоступенчатая попытка распарсить JSON с рисками:
+ * 1) strict JSON.parse
+ * 2) single-quotes -> double-quotes
+ * 3) trailing commas -> убрать
+ * 4) если получили объект, обернуть в массив
+ */
+function tryParseRisks(text) {
+  if (!text) return null
+  let trimmed = String(text).trim()
+  // Снимаем ```json fence
+  const fence = trimmed.match(/```(?:json|JSON)?\s*([\s\S]*?)\s*```/)
+  if (fence) trimmed = fence[1].trim()
+
+  const tryOnce = (s) => {
+    try {
+      const data = JSON.parse(s)
+      if (Array.isArray(data)) return data.map(normalizeRisk).filter(Boolean)
+      if (data && typeof data === 'object' && Array.isArray(data.risks)) {
+        return data.risks.map(normalizeRisk).filter(Boolean)
+      }
+      if (data && typeof data === 'object') {
+        const single = normalizeRisk(data)
+        return single ? [single] : null
+      }
+      return null
+    } catch (e) {
+      return null
+    }
+  }
+
+  let result = tryOnce(trimmed)
+  if (result && result.length > 0) return result
+
+  // Single-quotes -> double-quotes (только если двойных мало - чтоб не сломать содержимое)
+  if (trimmed.includes("'") && (trimmed.match(/"/g) || []).length < 4) {
+    result = tryOnce(trimmed.replace(/'/g, '"'))
+    if (result && result.length > 0) return result
+  }
+
+  // Trailing commas
+  const noTrail = trimmed.replace(/,(\s*[}\]])/g, '$1')
+  if (noTrail !== trimmed) {
+    result = tryOnce(noTrail)
+    if (result && result.length > 0) return result
+  }
+
+  return null
+}
+
+/**
+ * Ищет в строке кандидатные блоки с рисками (JSON-arrays / code-fences).
+ */
+function findRisksCandidates(source) {
+  const cands = []
+  // Все ```json``` / ``` блоки
+  const codeRe = /```(?:json|JSON)?\s*([\s\S]*?)\s*```/g
+  let m
+  while ((m = codeRe.exec(source))) {
+    if (/"(?:level|severity|quote|cite|recommendations)"/i.test(m[1])) cands.push(m[1])
+  }
+  // Любые массивы [...] с признаками риск-объектов
+  const arrRe = /\[\s*\{[\s\S]*?"(?:level|severity|quote|cite|recommendations|name)"[\s\S]*?\}\s*(?:,\s*\{[\s\S]*?\}\s*)*\]/gi
+  while ((m = arrRe.exec(source))) {
+    cands.push(m[0])
+  }
+  return cands
+}
+
+/**
  * Разбирает ответ модели на (1) текст отчёта без блока рисков и (2) массив рисков.
- * Если маркеры или JSON некорректны — возвращает исходный текст и пустой массив.
- * @param {string} raw
- * @returns {{ report: string, risks: Array }}
+ * Использует многоступенчатый fallback - если разметка маркерами сломана, ищет
+ * JSON-блоки или массивы по сигнатурам полей.
  */
 export function parseAnalysisResponse(raw) {
   const source = String(raw ?? '')
+
+  // Этап 1: маркеры RISKS-RISKS
   const openIdx = source.indexOf(RISKS_OPEN_TAG)
   const closeIdx = source.indexOf(RISKS_CLOSE_TAG)
-  if (openIdx < 0 || closeIdx < 0 || closeIdx < openIdx) {
-    return { report: stripRisksLeftovers(source), risks: [] }
-  }
-  const before = source.slice(0, openIdx)
-  const after = source.slice(closeIdx + RISKS_CLOSE_TAG.length)
-  const block = source.slice(openIdx + RISKS_OPEN_TAG.length, closeIdx)
-  const jsonText = extractJsonFromBlock(block)
-
-  let parsed = []
-  try {
-    const data = JSON.parse(jsonText)
-    if (Array.isArray(data)) parsed = data.map(normalizeRisk).filter(Boolean)
-  } catch (error) {
-    parsed = []
+  if (openIdx >= 0 && closeIdx > openIdx) {
+    const block = source.slice(openIdx + RISKS_OPEN_TAG.length, closeIdx)
+    const risks = tryParseRisks(block)
+    const merged = source.slice(0, openIdx) + source.slice(closeIdx + RISKS_CLOSE_TAG.length)
+    if (risks && risks.length > 0) {
+      return { report: stripRisksLeftovers(merged), risks }
+    }
+    // Маркеры есть, но JSON сломан - идём в fallback
   }
 
-  const merged = `${before}\n${after}`
-  const report = stripRisksLeftovers(merged)
-  return { report, risks: parsed }
+  // Этап 2: только открывающий маркер - всё после него пробуем как JSON
+  if (openIdx >= 0 && closeIdx < 0) {
+    const block = source.slice(openIdx + RISKS_OPEN_TAG.length)
+    const risks = tryParseRisks(block)
+    if (risks && risks.length > 0) {
+      return { report: stripRisksLeftovers(source.slice(0, openIdx)), risks }
+    }
+  }
+
+  // Этап 3: ищем кандидатные блоки (code fence или массив с типичными полями)
+  const candidates = findRisksCandidates(source)
+  for (const c of candidates) {
+    const risks = tryParseRisks(c)
+    if (risks && risks.length > 0) {
+      const cleaned = source.replace(c, '')
+      return { report: stripRisksLeftovers(cleaned), risks }
+    }
+  }
+
+  return { report: stripRisksLeftovers(source), risks: [] }
 }
 
 export function groupRisksByLevel(risks = []) {
