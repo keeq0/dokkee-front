@@ -26,6 +26,26 @@ describe('buildAnalysisPrompt', () => {
     expect(prompt).toContain('Сомнительно')
     expect(prompt).toContain('Большие риски')
   })
+
+  it('без options не содержит блок ДОПОЛНИТЕЛЬНЫХ ФОКУСОВ', () => {
+    const prompt = buildAnalysisPrompt('doc')
+    expect(prompt).not.toContain('ДОПОЛНИТЕЛЬНЫЕ ФОКУСЫ')
+  })
+
+  it('добавляет блок инструкций для выбранных options', () => {
+    const prompt = buildAnalysisPrompt('doc', { options: ['gdpr', 'tax'] })
+    expect(prompt).toContain('ДОПОЛНИТЕЛЬНЫЕ ФОКУСЫ АНАЛИЗА')
+    expect(prompt).toContain('GDPR')
+    expect(prompt).toContain('152-ФЗ')
+    expect(prompt).toContain('налог')
+    expect(prompt).not.toContain('коррупционные')
+  })
+
+  it('игнорирует неизвестные ключи options', () => {
+    const prompt = buildAnalysisPrompt('doc', { options: ['unknown', 'corruption'] })
+    expect(prompt).toContain('коррупционные')
+    expect(prompt).not.toContain('unknown')
+  })
 })
 
 describe('parseAnalysisResponse', () => {
