@@ -35,6 +35,7 @@ export function createDocumentRecord({ file = null, name = '', type = null, url 
     analysisResult: null,
     analysisError: false,
     risks: [],
+    pinnedRisk: null,
     chatHistory: []
   }
 }
