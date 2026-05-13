@@ -502,12 +502,15 @@ export default {
     getHighlightRoots() {
       const container = this.$refs.documentContainer;
       if (!container) return [];
-      const roots = Array.from(container.querySelectorAll('.docx-preview'));
+      // DOCX - один root .docx-preview (wrap mode).
+      // PDF - множество .pdf-text-layer по одному на страницу (overlay mode).
+      const roots = Array.from(container.querySelectorAll('.docx-preview, .pdf-text-layer'));
       return roots;
     },
-    getHighlightConfigForRoot() {
-      // Теперь и PDF и DOCX рендерятся как HTML через .docx-preview -
-      // используем wrap-режим (вкладываем <mark> в текст).
+    getHighlightConfigForRoot(root) {
+      if (root.classList.contains('pdf-text-layer')) {
+        return { mode: 'overlay', baseClass: 'risk-highlight risk-highlight--overlay' };
+      }
       return { mode: 'wrap', baseClass: 'risk-highlight' };
     },
     applyRiskHighlights() {
@@ -773,12 +776,17 @@ export default {
     },
 
     async renderPDF(doc) {
-      // PDF рендерится как HTML с СОХРАНЕНИЕМ форматирования:
-      // - bold/italic берутся из styles[fontName].fontFamily (содержит "Bold" / "Italic")
-      // - заголовки определяются по относительному размеру шрифта (item.height)
-      // - параграфы группируются hasEOL, пустые строки - разделители
-      // Единый wrapper .docx-preview - выделение, маркеры и font-scale работают
-      // одинаково с DOCX.
+      // Гибридный подход pdf.js:
+      // - <canvas> рисует страницу с полным форматированием (шрифты, отступы,
+      //   таблицы, изображения - точная копия PDF).
+      // - Поверх кладётся .pdf-text-layer (invisible) с правильно позиционированными
+      //   span'ами текста. Это даёт выделение, копирование и базу для overlay-маркеров.
+      // - Цветовые метки рисков накладываются позиционно (absolute) через
+      //   highlight service в overlay-режиме, считывая getClientRects Range'а
+      //   из text-layer'а.
+      // CSS-переменные --total-scale-factor / --scale-round-x обязательны:
+      // без них pdf.js v5 не может вычислить ширину/высоту layer'а и размер
+      // шрифта спанов.
       const lib = await this.ensurePdfJs();
       if (!doc?.url || !lib) return;
       const container = this.$refs.documentContainer;
@@ -788,117 +796,63 @@ export default {
         const loadingTask = lib.getDocument({ url: doc.url, verbosity: 0 });
         const pdf = await loadingTask.promise;
         this.totalPages = pdf.numPages;
-        const wrapper = document.createElement('div');
-        wrapper.className = 'docx-preview pdf-as-docx';
-        container.appendChild(wrapper);
+        const containerWidth = Math.max(container.clientWidth, 320);
+        const fontScale = this.fontScale || 1;
+        let extractedText = '';
 
-        // Первый проход: собираем строки всех страниц и статистику размеров.
-        const allPagesLines = [];
-        const fontSizes = [];
         for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
           const page = await pdf.getPage(pageNumber);
-          const tc = await page.getTextContent();
-          const styles = tc.styles || {};
-          const lines = [];
-          let cur = [];
-          for (const item of tc.items) {
-            if (item.str) {
-              const family = styles[item.fontName]?.fontFamily || '';
-              const bold = /bold|black|heavy|semibold/i.test(family);
-              const italic = /italic|oblique/i.test(family);
-              const fontSize = item.height || Math.abs(item.transform?.[3] || 0) || 12;
-              fontSizes.push(fontSize);
-              cur.push({ str: item.str, fontSize, bold, italic });
-            }
-            if (item.hasEOL) { lines.push(cur); cur = []; }
-          }
-          if (cur.length) lines.push(cur);
-          allPagesLines.push(lines);
-        }
-        const sortedFs = fontSizes.slice().sort((a, b) => a - b);
-        const baseFs = sortedFs[Math.floor(sortedFs.length / 2)] || 12;
+          const unscaledViewport = page.getViewport({ scale: 1 });
+          const scale = (containerWidth / unscaledViewport.width) * fontScale;
+          const viewport = page.getViewport({ scale });
 
-        const appendStyled = (parent, items, headingMode) => {
-          const groups = [];
-          let current = null;
-          for (const it of items) {
-            const isWS = /^\s+$/.test(it.str);
-            const bold = headingMode ? false : (it.bold || (isWS && current?.bold));
-            const italic = it.italic || (isWS && current?.italic);
-            if (current && current.bold === bold && current.italic === italic) {
-              current.text += it.str;
-            } else {
-              current = { text: it.str, bold, italic };
-              groups.push(current);
-            }
-          }
-          for (const g of groups) {
-            let el = document.createTextNode(g.text);
-            if (g.italic) { const e = document.createElement('em'); e.appendChild(el); el = e; }
-            if (g.bold) { const s = document.createElement('strong'); s.appendChild(el); el = s; }
-            parent.appendChild(el);
-          }
-        };
+          const pageContainer = document.createElement('div');
+          pageContainer.className = 'pdf-page-container';
+          pageContainer.style.position = 'relative';
+          pageContainer.style.width = `${viewport.width}px`;
+          pageContainer.style.height = `${viewport.height}px`;
 
-        // Каждая визуальная строка PDF становится отдельным элементом.
-        // Заголовки определяются:
-        // - по относительному размеру шрифта (item.height >= baseFs*1.25)
-        // - либо по жирности целой строки
-        // - либо ALL-CAPS короткой строки (для PDF без bold-фонтов)
-        // - либо префикс "1.", "1.1.", "Раздел N" в короткой строке
-        // Подряд идущие "p"-строки сливаются в один <p>, если предыдущая
-        // не закончилась терминатором предложения (.!?:) - так абзацы из
-        // wrapping'а склеиваются обратно.
-        const SENT_END_RE = /[.!?:;]\s*$/;
-        const NUM_HEADING_RE = /^(\d+\.(\d+\.)*\s+\S|Раздел\s+\d|Глава\s+\d|§\s*\d|статья\s+\d)/i;
-        const isAllCaps = (s) => {
-          const letters = s.replace(/[^A-Za-zА-Яа-яЁёÀ-ÿ]/g, '');
-          if (letters.length < 3) return false;
-          return letters === letters.toUpperCase();
-        };
-        for (let p = 0; p < allPagesLines.length; p++) {
-          const pageEl = document.createElement('section');
-          pageEl.className = 'docx pdf-page-html';
-          let mergeable = null;
-          for (const line of allPagesLines[p]) {
-            if (line.length === 0) { mergeable = null; continue; }
-            const text = line.map((i) => i.str).join('').trim();
-            if (!text) continue;
-            const maxFs = Math.max(...line.map((i) => i.fontSize));
-            const nonWS = line.filter((i) => !/^\s+$/.test(i.str));
-            const allBold = nonWS.length > 0 && nonWS.every((i) => i.bold);
-            let tag = 'p';
-            const shortLine = text.length < 120;
-            if (maxFs >= baseFs * 1.5) tag = 'h2';
-            else if (maxFs >= baseFs * 1.25) tag = 'h3';
-            else if (allBold && maxFs >= baseFs * 1.05 && shortLine) tag = 'h3';
-            else if (shortLine && isAllCaps(text)) tag = 'h3';
-            else if (shortLine && NUM_HEADING_RE.test(text)) tag = 'h3';
-            if (tag === 'p' && mergeable) {
-              mergeable.appendChild(document.createTextNode(' '));
-              appendStyled(mergeable, line, false);
-              if (SENT_END_RE.test(text)) mergeable = null;
-              continue;
+          // Canvas - визуальный рендер (forматирование, шрифты, лейаут).
+          const canvas = document.createElement('canvas');
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          canvas.className = 'pdf-page';
+          const ctx = canvas.getContext('2d');
+          await page.render({ canvasContext: ctx, viewport }).promise;
+          pageContainer.appendChild(canvas);
+
+          // Text-layer - invisible selectable text сверху canvas'а.
+          const textLayerDiv = document.createElement('div');
+          textLayerDiv.className = 'pdf-text-layer';
+          textLayerDiv.style.setProperty('--total-scale-factor', String(viewport.scale));
+          textLayerDiv.style.setProperty('--scale-factor', String(viewport.scale));
+          textLayerDiv.style.setProperty('--scale-round-x', '1px');
+          textLayerDiv.style.setProperty('--scale-round-y', '1px');
+          textLayerDiv.style.width = `${viewport.width}px`;
+          textLayerDiv.style.height = `${viewport.height}px`;
+          pageContainer.appendChild(textLayerDiv);
+
+          const textContent = await page.getTextContent();
+          extractedText += textContent.items.map((it) => it.str).join(' ') + '\n';
+          try {
+            if (lib.TextLayer) {
+              const textLayer = new lib.TextLayer({
+                textContentSource: textContent,
+                container: textLayerDiv,
+                viewport
+              });
+              await textLayer.render();
             }
-            const el = document.createElement(tag);
-            appendStyled(el, line, tag !== 'p');
-            pageEl.appendChild(el);
-            mergeable = (tag === 'p' && !SENT_END_RE.test(text)) ? el : null;
+          } catch (error) {
+            console.warn('PDF text-layer render:', error?.message || error);
           }
-          wrapper.appendChild(pageEl);
-          if (p < allPagesLines.length - 1) {
-            const hr = document.createElement('hr');
-            hr.className = 'pdf-page-break';
-            wrapper.appendChild(hr);
-          }
+
+          container.appendChild(pageContainer);
         }
 
-        const text = (wrapper.innerText || '').replace(/\s+/g, ' ').trim();
-        if (text && !doc.extractedText) {
-          this.documentsStore.setExtractedText(doc.id, text);
+        if (extractedText && !doc.extractedText) {
+          this.documentsStore.setExtractedText(doc.id, extractedText.trim());
         }
-        this.snapshotDocxOriginalStyles(wrapper);
-        this.applyDocxFontScale();
       } finally {
         container.classList.remove('pdf-loading');
       }
@@ -924,19 +878,45 @@ export default {
       }
     },
 
-    // Сохранено для совместимости (MainPage вызывает при toggle меню).
-    // С HTML-рендером PDF контент реагирует на изменение ширины через CSS,
-    // re-render не нужен.
-    updatePdfSize() {
-      return;
+    // Полный re-render PDF: вызывается при изменении ширины (Скрыть меню)
+    // и font-scale (масштаб слайдера). Canvas не масштабируется CSS-ом - его
+    // нужно пере-рисовывать с новым viewport.scale.
+    async updatePdfSize() {
+      if (!this.selectedDocument || this.selectedDocument.type !== 'pdf') return;
+      this.resizing = true;
+      try {
+        await this.$nextTick();
+        const container = this.$refs.documentContainer;
+        if (container) {
+          container.querySelectorAll('.pdf-page-container, .docx-preview').forEach((el) => el.remove());
+        }
+        await this.renderPDF(this.selectedDocument);
+        if (this.risks.length > 0) {
+          this.applyRiskHighlights();
+        }
+      } catch (error) {
+        console.error('PDF re-render error:', error);
+      } finally {
+        this.resizing = false;
+      }
     }
   },
   watch: {
     fontScalePercent() {
       const type = this.selectedDocument?.type;
-      // И PDF (как HTML) и DOCX масштабируются через DOM-walk - без re-render.
-      if (type === 'docx' || type === 'pdf') {
+      if (type === 'docx') {
+        // DOCX масштабируется DOM-walk'ом - мгновенно, без re-render.
         this.applyDocxFontScale();
+        return;
+      }
+      if (type === 'pdf') {
+        // PDF пере-рендеривает canvas с новым viewport.scale.
+        // Дебаунс 400ms - не дёргать рендер на каждый тик слайдера.
+        if (this.fontScaleRerenderTimer) clearTimeout(this.fontScaleRerenderTimer);
+        this.fontScaleRerenderTimer = setTimeout(() => {
+          this.updatePdfSize();
+          this.fontScaleRerenderTimer = null;
+        }, 400);
       }
     },
     'selectedDocument.id': {
@@ -1083,59 +1063,23 @@ export default {
   color: #222;
   user-select: text;
   background: #fff;
-  padding: 16px 24px;
-  box-sizing: border-box;
   width: 100%;
-  /* Шрифт масштабируется DOM-walk'ом через applyDocxFontScale -
-     надёжнее CSS zoom (не поддержан в части Firefox). */
-}
-.docx-preview.pdf-as-docx {
-  font-family: 'PT Sans', Arial, sans-serif;
-  font-size: 14px;
-  line-height: 1.55;
-}
-.docx-preview.pdf-as-docx :deep(.pdf-page-html) {
-  padding: 0;
-  margin: 0;
-  background: transparent;
-  box-shadow: none;
-}
-.docx-preview.pdf-as-docx :deep(p) {
-  margin: 0.4em 0;
-  word-break: break-word;
-}
-.docx-preview.pdf-as-docx :deep(h2) {
-  font-size: 1.4em;
-  font-weight: 700;
-  margin: 0.8em 0 0.4em;
-  line-height: 1.25;
-}
-.docx-preview.pdf-as-docx :deep(h3) {
-  font-size: 1.15em;
-  font-weight: 600;
-  margin: 0.6em 0 0.3em;
-  line-height: 1.3;
-}
-.docx-preview.pdf-as-docx :deep(strong) { font-weight: 700; }
-.docx-preview.pdf-as-docx :deep(em) { font-style: italic; }
-.docx-preview.pdf-as-docx :deep(.pdf-page-break) {
-  border: none;
-  border-top: 1px dashed #d9d9d9;
-  margin: 16px 0;
+  box-sizing: border-box;
 }
 
-/* Жёстко убираем большие поля Word-страницы и боковые отступы. Оставляем
-   только минимальный межабзацный margin для читаемости. */
+/* Перебиваем огромные поля страницы Word (padding: 56.7pt 42.5pt ...) на
+   компактные 10px. Сохраняем форматирование текста, но не оставляем
+   гигантских пустых полей вокруг документа. */
 .docx-preview :deep(.docx),
 .docx-preview :deep(section.docx),
 .docx-preview :deep(article.docx) {
+  padding: 10px !important;
+  margin: 0 0 12px 0 !important;
   width: 100% !important;
   max-width: 100% !important;
   min-width: 0 !important;
   min-height: 0 !important;
   height: auto !important;
-  padding: 0 !important;
-  margin: 0 0 12px 0 !important;
   box-shadow: none !important;
   background: transparent !important;
 }
@@ -1146,15 +1090,6 @@ export default {
   margin: 0 !important;
   width: auto !important;
   max-width: 100% !important;
-}
-.docx-preview :deep(p:first-child),
-.docx-preview :deep(h1:first-child),
-.docx-preview :deep(h2:first-child),
-.docx-preview :deep(h3:first-child) {
-  margin-top: 0 !important;
-}
-.docx-preview :deep(p:last-child) {
-  margin-bottom: 0 !important;
 }
 .content__panel {
   width: 200px;
@@ -2062,8 +1997,42 @@ export default {
 </style>
 
 <style>
-/* Неscoped: применяется к программно созданным элементам docx-preview и
-   динамическим mark/overlay, у которых нет data-v-* */
+/* Неscoped: применяется к программно созданным элементам docx-preview,
+   pdf canvas + text-layer и динамическим mark/overlay, у которых нет data-v-* */
+
+.pdf-page-container {
+  margin: 0 auto 12px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+.pdf-page {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* Invisible text-layer поверх canvas - содержит spans с правильным позиционированием.
+   pdf.js v5 строит их через calc(var(--total-scale-factor) * Xpx). */
+.pdf-text-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  line-height: 1;
+  color: transparent;
+  user-select: text;
+  z-index: 2;
+}
+.pdf-text-layer span,
+.pdf-text-layer br {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+.pdf-text-layer ::selection {
+  background: rgba(108, 103, 253, 0.4);
+}
 
 .risk-highlight {
   border-radius: 8px;
