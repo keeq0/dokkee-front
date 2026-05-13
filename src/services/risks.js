@@ -13,6 +13,22 @@ export const RISK_LEVEL_KEYS = Object.freeze({
 const RISKS_OPEN_TAG = '<!--RISKS-->'
 const RISKS_CLOSE_TAG = '<!--/RISKS-->'
 
+export const PROMPT_OPTIONS = Object.freeze({
+  gdpr: 'Проверить документ на соответствие GDPR и 152-ФЗ (защита персональных данных, согласия, трансграничная передача).',
+  tax: 'Дополнительно проанализировать налоговые риски: НДС, налог на прибыль, переквалификация выплат, формальные основания для проверок.',
+  corruption: 'Выделить коррупционные факторы: непрозрачные условия, неоправданные посредники, аффилированность, нерыночные цены.',
+  labor: 'Если в документе есть трудовые отношения - проверить трудовые договоры на скрытые штрафы, кабальные условия, нарушения ТК РФ.',
+  counterparty: 'Добавить анализ рисков для контрагента: его правоспособность, обязательства, штрафы и санкции в его сторону.'
+})
+
+export const PROMPT_OPTION_LABELS = Object.freeze({
+  gdpr: 'Проверить на соответствие GDPR/152-ФЗ',
+  tax: 'Анализировать налоговые риски',
+  corruption: 'Выделить коррупционные факторы',
+  labor: 'Проверить трудовые договоры на скрытые штрафы',
+  counterparty: 'Добавить анализ рисков для контрагента'
+})
+
 const PROMPT_TEMPLATE = `Ты — ведущий эксперт с 15+ годами опыта в анализе юридических, технических и коммерческих документов. Твоя задача — провести многоуровневый аудит, выявляя не только явные, но и скрытые риски, пробелы и возможности для оптимизации.
 
 Критерии качества:
@@ -59,14 +75,24 @@ ${RISKS_CLOSE_TAG}
 - quote — это точная подстрока документа, без многоточий и пропусков, иначе подсветка в тексте не сработает.
 - recommendations — массив строк (не объектов).
 - Никакого текста вне маркеров после ${RISKS_OPEN_TAG}.
-
+{{EXTRA_INSTRUCTIONS}}
 Документ для анализа:
 {{DOCUMENT_TEXT}}
 `
 
-export function buildAnalysisPrompt(text, { maxChars = 15000 } = {}) {
+export function buildAnalysisPrompt(text, { maxChars = 15000, options = [] } = {}) {
   const safe = (text || '').substring(0, maxChars)
-  return PROMPT_TEMPLATE.replace('{{DOCUMENT_TEXT}}', safe)
+  const extra = (Array.isArray(options) ? options : [])
+    .filter((key) => PROMPT_OPTIONS[key])
+    .map((key) => `- ${PROMPT_OPTIONS[key]}`)
+    .join('\n')
+  const extraSection = extra
+    ? `\nДОПОЛНИТЕЛЬНЫЕ ФОКУСЫ АНАЛИЗА:\n${extra}\n`
+    : ''
+  return PROMPT_TEMPLATE.replace('{{DOCUMENT_TEXT}}', safe).replace(
+    '{{EXTRA_INSTRUCTIONS}}',
+    extraSection
+  )
 }
 
 function extractJsonFromBlock(block) {

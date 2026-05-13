@@ -492,11 +492,11 @@ export default {
       }
       this.renderedDocId = doc.id;
     },
-    startAnalysisForAll() {
+    startAnalysisForAll(options = []) {
       this.documents.forEach((doc) => {
         if (doc.status !== DOCUMENT_STATUS.IDLE) return;
         if (doc.analysisResult || doc.analysisError) return;
-        this.runAnalysisFor(doc.id);
+        this.runAnalysisFor(doc.id, options);
       });
     },
     startEmulatorFor(docId) {
@@ -519,7 +519,7 @@ export default {
         this.emulators.delete(docId);
       }
     },
-    async runAnalysisFor(docId) {
+    async runAnalysisFor(docId, options = []) {
       const doc = this.documentsStore.byId(docId);
       if (!doc) return;
       if (doc.analysisResult || doc.analysisError) return;
@@ -545,9 +545,9 @@ export default {
         this.documentsStore.setAnalysisError(docId, true);
         return;
       }
-      await this.analyzeDocument(doc, text);
+      await this.analyzeDocument(doc, text, options);
     },
-    async analyzeDocument(doc, text) {
+    async analyzeDocument(doc, text, options = []) {
       const existingController = this.analysisControllers.get(doc.id);
       if (existingController) existingController.abort();
       const controller = new AbortController();
@@ -559,7 +559,7 @@ export default {
           model: DEEPSEEK_MODELS.REASONER,
           messages: [
             { role: 'system', content: 'You are a professional document analyst. Always respond in Russian, following the exact formatting instructions.' },
-            { role: 'user', content: buildAnalysisPrompt(text) }
+            { role: 'user', content: buildAnalysisPrompt(text, { options }) }
           ],
           temperature: 1.0,
           topP: 0.7,

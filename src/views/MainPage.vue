@@ -35,6 +35,10 @@
         @processing-complete="handleProcessingComplete"
         :analysisResult="analysisResult"
         :analysisError="analysisError" />
+      <PromptSettingsModal
+        :visible="promptModalOpen"
+        @confirm="handlePromptConfirm"
+        @cancel="handlePromptCancel" />
     </div>
   </div>
 </template>
@@ -43,19 +47,21 @@
 import { mapStores } from 'pinia';
 import AiAssistant from '@/components/AiAssistant.vue';
 import AnalysisResult from '@/components/AnalysisResult.vue';
+import PromptSettingsModal from '@/components/PromptSettingsModal.vue';
 import UploadDocuments from '@/components/UploadDocuments.vue';
 import { useDocumentsStore } from '@/stores/documents';
 
 export default {
   name: 'MainPage',
-  components: { AiAssistant, AnalysisResult, UploadDocuments },
+  components: { AiAssistant, AnalysisResult, PromptSettingsModal, UploadDocuments },
   data() {
     return {
       uploadDocumentsCollapsed: false,
       showUploadDocuments: true,
       processing: false,
       showAssistant: false,
-      assistantVisible: false
+      assistantVisible: false,
+      promptModalOpen: false
     }
   },
   computed: {
@@ -98,10 +104,14 @@ export default {
 
 
     handleProcessingStarted() {
+      this.promptModalOpen = true;
+    },
+    handlePromptConfirm(options) {
+      this.promptModalOpen = false;
       this.processing = true;
       this.$nextTick(() => {
         if (this.$refs.analysisResult?.startAnalysisForAll) {
-          this.$refs.analysisResult.startAnalysisForAll();
+          this.$refs.analysisResult.startAnalysisForAll(options);
         }
       });
       setTimeout(() => {
@@ -113,6 +123,9 @@ export default {
           }, 50);
         });
       }, 1000);
+    },
+    handlePromptCancel() {
+      this.promptModalOpen = false;
     },
     handleProcessingComplete() {
       this.processing = false;
