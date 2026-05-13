@@ -73,7 +73,10 @@
   <style scoped>
   .header {
     margin: 0 auto;
-    width: 1250px;
+    width: 100%;
+    max-width: none;
+    padding: 0 50px;
+    box-sizing: border-box;
     height: 80px;
     display: flex;
     align-items: center;
