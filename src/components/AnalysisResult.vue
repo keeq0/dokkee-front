@@ -218,6 +218,7 @@
 import mammoth from 'mammoth';
 import { mapStores } from 'pinia';
 import { chatCompletion, DEEPSEEK_MODELS } from '@/services/deepseek';
+import { highlightTextInRoot, clearHighlights } from '@/services/highlight';
 import { downloadAnalysisReport } from '@/services/reportExport';
 import {
   buildAnalysisPrompt,
@@ -386,7 +387,7 @@ export default {
     positionRiskPopover(index) {
       const container = this.$refs.documentContainer;
       if (!container) return;
-      const mark = container.querySelector(`mark.risk-highlight[data-risk-id="${index}"]`);
+      const mark = container.querySelector(`.risk-highlight[data-risk-id="${index}"]`);
       if (!mark) {
         this.riskPopoverPosition = { top: 16, left: 16 };
         return;
@@ -408,48 +409,46 @@ export default {
       this.$emit('show-assistant', { risk: this.activeRisk });
       this.closeRiskPopover();
     },
+    getHighlightRoots() {
+      const container = this.$refs.documentContainer;
+      if (!container) return [];
+      const roots = Array.from(container.querySelectorAll('.docx-preview, .pdf-text-layer'));
+      return roots;
+    },
+    getHighlightConfigForRoot(root) {
+      if (root.classList.contains('pdf-text-layer')) {
+        return { mode: 'overlay', baseClass: 'risk-highlight risk-highlight--overlay' };
+      }
+      return { mode: 'wrap', baseClass: 'risk-highlight' };
+    },
     applyRiskHighlights() {
-      const container = this.$refs.documentContainer?.querySelector('.docx-preview');
-      if (!container) return;
-      this.clearRiskHighlights(container);
+      const roots = this.getHighlightRoots();
+      if (roots.length === 0) return;
+      roots.forEach((root) => this.clearRiskHighlights(root));
       this.risks.forEach((risk, index) => {
         if (!risk?.quote || risk.quote.length < 3) return;
         const levelKey = RISK_LEVEL_KEYS[risk.level];
         if (!levelKey) return;
-        const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
-        let node;
-        while ((node = walker.nextNode())) {
-          const value = node.nodeValue || '';
-          const idx = value.indexOf(risk.quote);
-          if (idx < 0) continue;
-          try {
-            const range = document.createRange();
-            range.setStart(node, idx);
-            range.setEnd(node, idx + risk.quote.length);
-            const mark = document.createElement('mark');
-            mark.className = `risk-highlight risk-highlight--${levelKey}`;
-            mark.dataset.riskId = String(index);
-            mark.addEventListener('click', (event) => {
+        for (const root of roots) {
+          const { mode, baseClass } = this.getHighlightConfigForRoot(root);
+          const result = highlightTextInRoot(root, risk.quote, {
+            mode,
+            className: `${baseClass} risk-highlight--${levelKey}`,
+            dataset: { riskId: String(index) },
+            onClick: (event) => {
               event.stopPropagation();
               this.selectRisk(index);
-            });
-            range.surroundContents(mark);
-          } catch (error) {
-            // если range пересекает несколько узлов - пропускаем риск
-          }
-          break;
+            }
+          });
+          if (result) break;
         }
       });
     },
     clearRiskHighlights(rootEl) {
       const root = rootEl || this.$refs.documentContainer;
       if (!root) return;
-      root.querySelectorAll('mark.risk-highlight').forEach((mark) => {
-        const parent = mark.parentNode;
-        while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
-        parent.removeChild(mark);
-        if (parent.normalize) parent.normalize();
-      });
+      clearHighlights(root, 'mark.risk-highlight');
+      root.querySelectorAll('span.risk-highlight--overlay').forEach((el) => el.remove());
     },
     handleDocumentClick(event) {
       if (this.fontSizeOpen && !this.$refs.fontSizeRoot?.contains(event.target)) {
@@ -464,7 +463,7 @@ export default {
       if (this.activeRiskKey !== null) {
         const popover = this.$el.querySelector?.('.risk-popover');
         const isRiskPanel = event.target.closest?.('.risk-panel');
-        const isHighlight = event.target.closest?.('mark.risk-highlight');
+        const isHighlight = event.target.closest?.('.risk-highlight');
         if (popover && !popover.contains(event.target) && !isRiskPanel && !isHighlight) {
           this.closeRiskPopover();
         }
@@ -578,7 +577,7 @@ export default {
         this.documentsStore.setRisks(doc.id, risks);
         this.documentsStore.setAnalysisResult(doc.id, report);
         await this.$nextTick();
-        if (doc.type === 'docx' && this.selectedDocument?.id === doc.id) {
+        if (this.selectedDocument?.id === doc.id) {
           this.applyRiskHighlights();
         }
         this.$emit('analysis-complete', { result: report, error: false, documentId: doc.id });
@@ -657,6 +656,8 @@ export default {
           const pageContainer = document.createElement('div');
           pageContainer.classList.add('pdf-page-container');
           pageContainer.style.position = 'relative';
+          pageContainer.style.width = `${viewport.width}px`;
+          pageContainer.style.height = `${viewport.height}px`;
 
           const canvas = document.createElement('canvas');
           canvas.width = viewport.width;
@@ -669,8 +670,28 @@ export default {
             viewport
           };
           await page.render(renderContext).promise;
-
           pageContainer.appendChild(canvas);
+
+          const textLayerDiv = document.createElement('div');
+          textLayerDiv.className = 'pdf-text-layer';
+          textLayerDiv.style.width = `${viewport.width}px`;
+          textLayerDiv.style.height = `${viewport.height}px`;
+          pageContainer.appendChild(textLayerDiv);
+
+          try {
+            const textContent = await page.getTextContent();
+            if (lib.TextLayer) {
+              const textLayer = new lib.TextLayer({
+                textContentSource: textContent,
+                container: textLayerDiv,
+                viewport
+              });
+              await textLayer.render();
+            }
+          } catch (error) {
+            console.warn('PDF text-layer render failed:', error?.message || error);
+          }
+
           container.appendChild(pageContainer);
         }
       } finally {
@@ -709,6 +730,9 @@ export default {
           container.querySelectorAll('.pdf-page-container').forEach((el) => el.remove());
         }
         await this.renderPDF(this.selectedDocument);
+        if (this.risks.length > 0) {
+          this.applyRiskHighlights();
+        }
       } catch (error) {
         console.error('Error updating PDF size:', error);
       } finally {
@@ -736,7 +760,7 @@ export default {
         }
         await this.$nextTick();
         await this.renderSelectedDocument();
-        if (this.selectedDocument?.type === 'docx' && this.risks.length > 0) {
+        if (this.risks.length > 0) {
           this.applyRiskHighlights();
         }
       }
@@ -823,6 +847,7 @@ export default {
 .pdf-page-container {
   margin-bottom: 10px;
 }
+
 .pdf-page {
   width: 100%;
   max-width: 100%;
@@ -1522,28 +1547,6 @@ export default {
   font-weight: 600;
 }
 
-.risk-highlight {
-  border-radius: 3px;
-  padding: 0 2px;
-  cursor: pointer;
-  transition: filter 0.15s ease;
-}
-
-.risk-highlight:hover {
-  filter: brightness(0.95);
-}
-
-.risk-highlight--good {
-  background-color: rgba(0, 200, 0, 0.25);
-}
-
-.risk-highlight--warn {
-  background-color: rgba(255, 200, 0, 0.32);
-}
-
-.risk-highlight--danger {
-  background-color: rgba(255, 70, 70, 0.3);
-}
 
 .risk-popover {
   position: absolute;
@@ -1647,5 +1650,61 @@ export default {
   font-size: 11px;
   color: #333;
   line-height: 1.4;
+}
+</style>
+
+<style>
+/* Неscoped: применяется к программно созданным элементам (mammoth-HTML,
+   pdfjs text-layer, динамические mark/overlay), у которых нет data-v-* */
+.pdf-text-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: hidden;
+  line-height: 1;
+  color: transparent;
+  user-select: text;
+  z-index: 1;
+}
+
+.pdf-text-layer span,
+.pdf-text-layer br {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+
+.pdf-text-layer ::selection {
+  background: rgba(108, 103, 253, 0.4);
+}
+
+.risk-highlight {
+  border-radius: 3px;
+  padding: 0 2px;
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+
+.risk-highlight:hover {
+  filter: brightness(0.95);
+}
+
+.risk-highlight--overlay {
+  padding: 0;
+  border-radius: 2px;
+}
+
+.risk-highlight--good {
+  background-color: rgba(0, 200, 0, 0.45);
+}
+
+.risk-highlight--warn {
+  background-color: rgba(255, 200, 0, 0.5);
+}
+
+.risk-highlight--danger {
+  background-color: rgba(255, 70, 70, 0.5);
 }
 </style>
