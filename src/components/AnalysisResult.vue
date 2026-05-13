@@ -121,46 +121,52 @@
           </div>
         </div>
       </div>
-      <div
-        v-if="activeRisk && riskPopoverPosition"
-        class="risk-popover"
-        :class="`risk-popover--${RISK_LEVEL_KEYS[activeRisk.level]}`"
-        :style="{ top: riskPopoverPosition.top + 'px', left: riskPopoverPosition.left + 'px' }"
-        @click.stop>
-        <header class="risk-popover__header">
-          <span class="risk-popover__level">{{ activeRisk.level }}<span v-if="activeRisk.section"> | {{ activeRisk.section }}</span></span>
-          <button type="button" class="risk-popover__close" @click="closeRiskPopover">×</button>
-        </header>
-        <h5 class="risk-popover__title">{{ activeRisk.name }}</h5>
-        <blockquote class="risk-popover__quote">{{ activeRisk.quote }}</blockquote>
-        <p class="risk-popover__comment">{{ activeRisk.comment }}</p>
-        <div class="risk-popover__actions">
-          <button
-            type="button"
-            class="risk-popover__btn"
-            :disabled="!activeRisk.recommendations?.length"
-            @click="recommendationsExpanded = !recommendationsExpanded">
-            {{ recommendationsExpanded ? 'Скрыть' : 'Рекомендации' }}
-            <span v-if="activeRisk.recommendations?.length"> ({{ activeRisk.recommendations.length }})</span>
-          </button>
-          <button
-            type="button"
-            class="risk-popover__btn risk-popover__btn--done"
-            :class="{ 'risk-popover__btn--done-active': activeRisk.completed }"
-            @click="toggleRiskCompleted">
-            {{ activeRisk.completed ? 'Снять статус' : 'Готово' }}
-          </button>
-          <button
-            type="button"
-            class="risk-popover__btn risk-popover__btn--primary"
-            @click="askAiAboutRisk">
-            Спросить у ИИ
-          </button>
+      <transition name="risk-popover-slide">
+        <div
+          v-if="activeRisk"
+          class="risk-popover"
+          :class="`risk-popover--${RISK_LEVEL_KEYS[activeRisk.level]}`"
+          @click.stop>
+          <header class="risk-popover__header">
+            <div class="risk-popover__head-meta">
+              <span class="risk-popover__level">{{ activeRisk.level }}</span>
+              <span v-if="activeRisk.section" class="risk-popover__section">{{ activeRisk.section }}</span>
+            </div>
+            <button type="button" class="risk-popover__close" @click="closeRiskPopover" aria-label="Закрыть">×</button>
+          </header>
+          <div class="risk-popover__body">
+            <h5 class="risk-popover__title">{{ activeRisk.name }}</h5>
+            <blockquote class="risk-popover__quote">{{ activeRisk.quote }}</blockquote>
+            <p class="risk-popover__comment">{{ activeRisk.comment }}</p>
+            <ul v-if="recommendationsExpanded && activeRisk.recommendations?.length" class="risk-popover__recommendations">
+              <li v-for="(rec, idx) in activeRisk.recommendations" :key="idx">{{ rec }}</li>
+            </ul>
+          </div>
+          <div class="risk-popover__actions">
+            <button
+              type="button"
+              class="risk-popover__btn"
+              :disabled="!activeRisk.recommendations?.length"
+              @click="recommendationsExpanded = !recommendationsExpanded">
+              {{ recommendationsExpanded ? 'Скрыть' : 'Рекомендации' }}
+              <span v-if="activeRisk.recommendations?.length"> ({{ activeRisk.recommendations.length }})</span>
+            </button>
+            <button
+              type="button"
+              class="risk-popover__btn risk-popover__btn--done"
+              :class="{ 'risk-popover__btn--done-active': activeRisk.completed }"
+              @click="toggleRiskCompleted">
+              {{ activeRisk.completed ? 'Снять статус' : 'Готово' }}
+            </button>
+            <button
+              type="button"
+              class="risk-popover__btn risk-popover__btn--primary"
+              @click="askAiAboutRisk">
+              Спросить у ИИ
+            </button>
+          </div>
         </div>
-        <ul v-if="recommendationsExpanded && activeRisk.recommendations?.length" class="risk-popover__recommendations">
-          <li v-for="(rec, idx) in activeRisk.recommendations" :key="idx">{{ rec }}</li>
-        </ul>
-      </div>
+      </transition>
 
       <div class="content__panel" :class="{ 'expanded': expanded }">
         <ul class="panel__levels">
@@ -217,7 +223,7 @@
                   class="risk-panel__item"
                   :class="{ 'risk-panel__item--active': activeRiskKey === risks.indexOf(risk), 'risk-panel__item--completed': risk.completed }"
                   @click="selectRisk(risks.indexOf(risk))">
-                  <span class="risk-panel__item-name">{{ risk.name || risk.quote.slice(0, 40) }}</span>
+                  <span class="risk-panel__item-name">{{ riskDisplayName(risk) }}</span>
                   <span v-if="risk.completed" class="risk-panel__item-badge">Готово</span>
                 </li>
               </ul>
@@ -230,7 +236,7 @@
 </template>
 
 <script>
-import mammoth from 'mammoth';
+import { renderAsync as renderDocxAsync } from 'docx-preview';
 import { mapStores } from 'pinia';
 import { chatCompletion, DEEPSEEK_MODELS } from '@/services/deepseek';
 import { highlightTextInRoot, clearHighlights } from '@/services/highlight';
@@ -277,7 +283,6 @@ export default {
       onDocumentClick: null,
       activeRiskKey: null,
       recommendationsExpanded: false,
-      riskPopoverPosition: null,
       isExporting: false,
       fontScaleRerenderTimer: null,
       panState: {
@@ -344,8 +349,7 @@ export default {
       if (this.analysisInProgress) {
         return getProgressStatusText(this.progressPercent);
       }
-      if (!this.hasDocument) return 'Загрузите документ(-ы) для начала работы';
-      return 'Загрузите документ(-ы) для начала работы';
+      return 'Ожидаю…';
     },
     documentProgressList() {
       return this.documents.map((doc) => ({
@@ -399,36 +403,35 @@ export default {
     resetFontScale() {
       this.fontScalePercent = 100;
     },
+    riskDisplayName(risk) {
+      // В risk-panel показываем только название (без пункта/раздела).
+      // Пункт виден в попапе. Очищаем префикс типа "п. 2.3 - Название" -> "Название".
+      const name = risk?.name || (risk?.quote || '').slice(0, 40);
+      if (!risk?.section) return name;
+      // Если name начинается с section, обрезаем префикс.
+      const sectionPrefix = String(risk.section).trim();
+      const trimmed = name.replace(new RegExp(`^\\s*${sectionPrefix.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\s*[-—:.]?\\s*`, 'i'), '');
+      return trimmed || name;
+    },
     selectRisk(index) {
       this.activeRiskKey = index;
       this.recommendationsExpanded = false;
       this.fileSelectorOpen = false;
       this.fontSizeOpen = false;
-      this.$nextTick(() => this.positionRiskPopover(index));
+      // Попап теперь не позиционируем по координатам - он закреплён внизу
+      // через CSS. Только скроллим к маркеру в документе.
+      this.$nextTick(() => this.scrollToActiveRiskMark(index));
     },
     closeRiskPopover() {
       this.activeRiskKey = null;
       this.recommendationsExpanded = false;
-      this.riskPopoverPosition = null;
     },
-    positionRiskPopover(index) {
-      // Попап позиционируется относительно .analysis__content (фиксированная
-      // относительно вьюпорта внутри AnalysisResult), чтобы не скроллился вместе
-      // с документом.
-      const analysisContent = this.$el?.querySelector?.('.analysis__content');
+    scrollToActiveRiskMark(index) {
       const docContainer = this.$refs.documentContainer;
-      if (!analysisContent || !docContainer) return;
+      if (!docContainer) return;
       const mark = docContainer.querySelector(`.risk-highlight[data-risk-id="${index}"]`);
-      if (!mark) {
-        this.riskPopoverPosition = { top: 16, left: 16 };
-        return;
-      }
+      if (!mark) return;
       mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      const contentRect = analysisContent.getBoundingClientRect();
-      const markRect = mark.getBoundingClientRect();
-      const top = Math.max(8, markRect.bottom - contentRect.top + 6);
-      const left = Math.max(8, Math.min(markRect.left - contentRect.left, analysisContent.clientWidth - 340));
-      this.riskPopoverPosition = { top, left };
     },
     toggleRiskCompleted() {
       if (this.activeRiskKey === null) return;
@@ -693,47 +696,32 @@ export default {
 
     async renderDocx(doc) {
       if (!doc?.file) return;
-      const arrayBuffer = await doc.file.arrayBuffer();
-      // styleMap сохраняет жирность, курсив, заголовки, списки, таблицы как
-      // соответствующие HTML-теги, чтобы форматирование документа отображалось
-      // максимально близко к оригиналу.
-      const { value: html } = await mammoth.convertToHtml(
-        { arrayBuffer },
-        {
-          styleMap: [
-            "p[style-name='Heading 1'] => h1:fresh",
-            "p[style-name='Heading 2'] => h2:fresh",
-            "p[style-name='Heading 3'] => h3:fresh",
-            "p[style-name='Heading 4'] => h4:fresh",
-            "p[style-name='Заголовок 1'] => h1:fresh",
-            "p[style-name='Заголовок 2'] => h2:fresh",
-            "p[style-name='Заголовок 3'] => h3:fresh",
-            "p[style-name='Заголовок 4'] => h4:fresh",
-            "p[style-name='Title'] => h1.title:fresh",
-            "p[style-name='Subtitle'] => h2.subtitle:fresh",
-            "r[style-name='Strong'] => strong",
-            "r[style-name='Emphasis'] => em",
-            "b => strong",
-            "i => em",
-            "u => u"
-          ],
-          includeDefaultStyleMap: true
-        }
-      );
-      this.documentsStore.setHtmlPreview(doc.id, html);
-
-      const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-      if (text && !doc.extractedText) {
-        this.documentsStore.setExtractedText(doc.id, text);
-      }
-      this.totalPages = 1;
-
       const container = this.$refs.documentContainer;
       if (!container) return;
       const wrapper = document.createElement('div');
       wrapper.className = 'docx-preview';
-      wrapper.innerHTML = html;
       container.appendChild(wrapper);
+      // docx-preview сохраняет inline-стили оригинального документа:
+      // отступы, выравнивание, табы, списки, таблицы - близко к Word.
+      await renderDocxAsync(doc.file, wrapper, null, {
+        className: 'docx',
+        inWrapper: false,
+        ignoreWidth: false,
+        ignoreHeight: false,
+        ignoreFonts: false,
+        breakPages: true,
+        ignoreLastRenderedPageBreak: true,
+        experimental: false,
+        trimXmlDeclaration: true,
+        useBase64URL: false,
+        debug: false
+      });
+      const text = (wrapper.innerText || '').replace(/\s+/g, ' ').trim();
+      if (text && !doc.extractedText) {
+        this.documentsStore.setExtractedText(doc.id, text);
+      }
+      this.documentsStore.setHtmlPreview(doc.id, wrapper.innerHTML);
+      this.totalPages = 1;
     },
 
     async renderPDF(doc) {
@@ -782,6 +770,11 @@ export default {
           textLayerDiv.className = 'pdf-text-layer';
           textLayerDiv.style.width = `${viewport.width}px`;
           textLayerDiv.style.height = `${viewport.height}px`;
+          // pdf.js v5 строит left/top/font-size в inline-стилях каждого span'а
+          // через calc(var(--total-scale-factor) * Xpx). Без этой переменной
+          // на контейнере получается 0px - текст невидим и не выделяется.
+          textLayerDiv.style.setProperty('--total-scale-factor', String(viewport.scale));
+          textLayerDiv.style.setProperty('--scale-factor', String(viewport.scale));
           pageContainer.appendChild(textLayerDiv);
 
           try {
@@ -951,13 +944,15 @@ export default {
   gap: 10px;
   position: relative;
   max-height: 500px;
+  height: 500px;
+  overflow: hidden;
 }
 .content__document {
   width: 100%;
-  max-height: 500px;
+  height: 100%;
   overflow: auto;
   position: relative;
-  background: #f7f7f9;
+  background: #fff;
   border-radius: 8px;
 }
 
@@ -994,53 +989,20 @@ export default {
 }
 
 .docx-preview {
-  padding: 20px 28px;
-  font-family: 'PT Sans', sans-serif;
-  font-size: calc(14px * var(--preview-font-scale, 1));
-  line-height: 1.5;
   color: #222;
   user-select: text;
-  transition: font-size 0.2s ease;
-}
-
-.docx-preview :deep(h1),
-.docx-preview :deep(h2),
-.docx-preview :deep(h3) {
-  margin: 1.2em 0 0.5em;
-  font-weight: 600;
-}
-
-.docx-preview :deep(p) {
-  margin: 0.6em 0;
-}
-
-.docx-preview :deep(table) {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 1em 0;
-}
-
-.docx-preview :deep(td),
-.docx-preview :deep(th) {
-  border: 1px solid #d9d9d9;
-  padding: 6px 10px;
-}
-
-.docx-preview :deep(img) {
-  max-width: 100%;
-  height: auto;
-  display: block;
-  margin: 1em auto;
-}
-
-.docx-preview :deep(ul),
-.docx-preview :deep(ol) {
-  padding-left: 1.5em;
-  margin: 0.6em 0;
+  /* CSS zoom масштабирует весь контейнер вместе с inline-стилями docx-preview,
+     включая шрифты, отступы и таблицы. zoom поддерживается в Chrome/Safari/Edge
+     и в Firefox начиная с 126. */
+  zoom: var(--preview-font-scale, 1);
+  background: #fff;
 }
 .content__panel {
   width: 200px;
   transition: all 0.3s ease;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 .panel__levels {
   list-style: none;
@@ -1470,7 +1432,8 @@ export default {
 
 .analysis__progress {
   position: relative;
-  width: 300px;
+  width: 100%;
+  max-width: 260px;
   min-height: 30px;
   border: 1px solid #e6e6e6;
   border-radius: 16px;
@@ -1606,7 +1569,8 @@ export default {
 
 .risk-panel {
   width: 100%;
-  max-height: 500px;
+  flex: 1 1 0;
+  min-height: 0;
   border-left: 1px solid #e6e6e6;
   padding: 10px;
   display: flex;
@@ -1721,23 +1685,53 @@ export default {
 .risk-popover {
   position: absolute;
   z-index: 40;
-  width: 300px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: 60%;
   background: #fff;
   border: 1px solid #e6e6e6;
-  border-radius: 12px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14);
+  border-radius: 12px 12px 0 0;
+  box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.12);
   overflow: hidden;
   cursor: default;
+  display: flex;
+  flex-direction: column;
+}
+
+.risk-popover-slide-enter-active,
+.risk-popover-slide-leave-active {
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+.risk-popover-slide-enter-from,
+.risk-popover-slide-leave-to {
+  transform: translateY(100%);
+  opacity: 0;
 }
 
 .risk-popover__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 10px;
+  padding: 8px 14px;
   color: #fff;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
+  flex-shrink: 0;
+}
+
+.risk-popover__head-meta {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.risk-popover__section {
+  background: rgba(255, 255, 255, 0.2);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .risk-popover--good .risk-popover__header { background: #1f9d4a; }
@@ -1748,53 +1742,66 @@ export default {
   background: transparent;
   border: none;
   color: #fff;
-  font-size: 16px;
+  font-size: 20px;
   line-height: 1;
   cursor: pointer;
-  padding: 0 4px;
+  padding: 0 6px;
   opacity: 0.85;
 }
 .risk-popover__close:hover { opacity: 1; }
 
+.risk-popover__body {
+  padding: 10px 16px 4px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .risk-popover__title {
-  margin: 8px 12px 4px;
-  font-size: 13px;
+  margin: 0 0 6px;
+  font-size: 14px;
   font-weight: 600;
+  color: #222;
 }
 
 .risk-popover__quote {
-  margin: 4px 12px 6px;
-  padding: 6px 8px;
+  margin: 6px 0;
+  padding: 8px 12px;
   border-left: 3px solid #d9d9d9;
   background: #f7f7f7;
-  font-size: 11px;
+  font-size: 12px;
   font-style: italic;
   color: #444;
-  max-height: 100px;
-  overflow-y: auto;
+  line-height: 1.45;
 }
 
+.risk-popover--good .risk-popover__quote { border-left-color: #1f9d4a; }
+.risk-popover--warn .risk-popover__quote { border-left-color: #d99c00; }
+.risk-popover--danger .risk-popover__quote { border-left-color: #d04040; }
+
 .risk-popover__comment {
-  margin: 4px 12px;
+  margin: 6px 0;
   font-size: 12px;
   color: #333;
-  line-height: 1.35;
+  line-height: 1.45;
 }
 
 .risk-popover__actions {
   display: flex;
-  gap: 6px;
-  padding: 8px 12px;
+  gap: 8px;
+  padding: 10px 16px;
   border-top: 1px solid #efefef;
+  background: #fafafa;
+  flex-shrink: 0;
 }
 
 .risk-popover__btn {
   flex: 1;
-  height: 28px;
+  height: 32px;
   border: 1px solid #d9d9d9;
   border-radius: 6px;
   background: #fff;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: background-color 0.15s ease, color 0.15s ease;
@@ -1827,11 +1834,11 @@ export default {
 
 .risk-popover__recommendations {
   list-style: disc;
-  padding: 0 12px 10px 28px;
-  margin: 0;
-  font-size: 11px;
+  padding: 6px 0 6px 22px;
+  margin: 8px 0 0;
+  font-size: 12px;
   color: #333;
-  line-height: 1.4;
+  line-height: 1.45;
 }
 </style>
 

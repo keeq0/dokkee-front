@@ -86,12 +86,12 @@ describe('createProgressEmulator', () => {
     expect(onProgress.mock.calls.length).toBe(2)
   })
 
-  it('значения по умолчанию: tickMs=1000, tickStep=2, cap=99', () => {
+  it('значения по умолчанию: tickMs=1000, tickStep=1, cap=99', () => {
     const onProgress = vi.fn()
     const emulator = createProgressEmulator({ onProgress })
     emulator.start()
     expect(onProgress).toHaveBeenLastCalledWith(0)
     vi.advanceTimersByTime(1000)
-    expect(onProgress).toHaveBeenLastCalledWith(2)
+    expect(onProgress).toHaveBeenLastCalledWith(1)
   })
 })

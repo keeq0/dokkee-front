@@ -102,18 +102,16 @@
             <img v-if="msg.role === 'user'" src="@/assets/user.png" alt="user" />
             <img v-else src="@/assets/ai.svg" alt="ai" />
           </div>
-          <div class="chat-message__content">
-            <div
-              v-if="msg.role === 'user' && msg.pinnedRisk"
-              class="chat-pinned-risk chat-pinned-risk--inline"
-              :class="`chat-pinned-risk--${pinnedRiskLevelKeyOf(msg.pinnedRisk)}`">
-              <div class="chat-pinned-risk__head">
-                <span class="chat-pinned-risk__badge">{{ msg.pinnedRisk.level }}</span>
-              </div>
-              <div class="chat-pinned-risk__title">{{ msg.pinnedRisk.name || msg.pinnedRisk.level }}</div>
-              <blockquote class="chat-pinned-risk__quote">{{ msg.pinnedRisk.quote }}</blockquote>
+          <div class="chat-message__content" v-html="renderMarkdown(msg.content)"></div>
+          <div
+            v-if="msg.role === 'user' && msg.pinnedRisk"
+            class="chat-pinned-risk chat-pinned-risk--inline"
+            :class="`chat-pinned-risk--${pinnedRiskLevelKeyOf(msg.pinnedRisk)}`">
+            <div class="chat-pinned-risk__head">
+              <span class="chat-pinned-risk__badge">{{ msg.pinnedRisk.level }}</span>
             </div>
-            <div v-html="renderMarkdown(msg.content)"></div>
+            <div class="chat-pinned-risk__title">{{ msg.pinnedRisk.name || msg.pinnedRisk.level }}</div>
+            <blockquote class="chat-pinned-risk__quote">{{ msg.pinnedRisk.quote }}</blockquote>
           </div>
         </div>
       </div>
@@ -131,7 +129,7 @@
       <div
         v-if="showScrollToBottom"
         class="scroll-to-bottom"
-        @click="scrollToBottom"
+        @click="scrollToBottom({ force: true })"
       >
         <img src="@/assets/arrow_down.png" class="scroll-to-bottom__icon" alt="" />
       </div>
@@ -241,7 +239,10 @@ export default {
       questionText: '',
       isWaitingForAnswer: false,
       activeStreamer: null,
-      pendingPinnedRisk: null
+      pendingPinnedRisk: null,
+      // Авто-скролл к низу включён пока пользователь сам не отскроллил вверх.
+      // Когда возвращается в самый низ - снова true.
+      autoScrollEnabled: true
     };
   },
   computed: {
@@ -313,10 +314,22 @@ export default {
       Math.max(window.innerWidth * 0.465, this.minWidth),
       this.maxWidth
     );
-    setTimeout(() => {
+    // Если открываемся уже с готовым анализом - пропускаем typing-анимацию.
+    if (this.analysisResult || this.analysisError) {
+      this.firstMessageComplete = true;
       this.showFirstLoading = false;
-      this.startFirstTyping();
-    }, 2000);
+      this.typedFirstMessage = this.fullFirstMessage;
+      this.showSecondLoading = false;
+      this.typedSecondHeader = this.fullSecondHeader;
+      this.fullSecondBody = this.analysisError ? 'Анализ недоступен' : this.analysisResult;
+      this.allMessagesComplete = true;
+      this.prepareFullHtmlImmediate();
+    } else {
+      setTimeout(() => {
+        this.showFirstLoading = false;
+        this.startFirstTyping();
+      }, 2000);
+    }
     this.$nextTick(() => this.handleScroll());
   },
   beforeUnmount() {
@@ -355,7 +368,7 @@ export default {
       return '';
     },
     resetForNewDocument() {
-      // Останавливаем все активные интервалы и сбрасываем флаги.
+      // Останавливаем активные интервалы.
       if (this.firstTypingInterval) {
         clearInterval(this.firstTypingInterval);
         this.firstTypingInterval = null;
@@ -364,28 +377,65 @@ export default {
         clearInterval(this.secondTypingInterval);
         this.secondTypingInterval = null;
       }
-      this.firstMessageComplete = false;
-      this.showFirstLoading = true;
-      this.showSecondLoading = true;
-      this.allMessagesComplete = false;
-      this.waitingForAnalysis = false;
-      this.typedFirstMessage = '';
-      this.typedSecondHeader = '';
-      this.displayText = '';
-      this.rawHtml = '';
-      this.headings = [];
       this.questionText = '';
       this.isWaitingForAnswer = false;
       this.showToc = false;
-      this.fullSecondBody = this.analysisError
-        ? 'Анализ недоступен'
-        : this.analysisResult || 'Идет анализ документа...';
-      // Перезапускаем последовательность.
-      setTimeout(() => {
+      this.headings = [];
+
+      const hasResult = !!this.analysisResult;
+      const hasError = !!this.analysisError;
+
+      if (hasResult || hasError) {
+        // Анализ уже сделан - сразу показываем готовое состояние без typing.
+        this.firstMessageComplete = true;
         this.showFirstLoading = false;
-        this.startFirstTyping();
-      }, 200);
+        this.typedFirstMessage = this.fullFirstMessage;
+        this.showSecondLoading = false;
+        this.typedSecondHeader = this.fullSecondHeader;
+        this.fullSecondBody = hasError ? 'Анализ недоступен' : this.analysisResult;
+        this.allMessagesComplete = true;
+        this.waitingForAnalysis = false;
+        this.prepareFullHtmlImmediate();
+      } else {
+        // Анализ ещё не готов - сбрасываем и запускаем typing.
+        this.firstMessageComplete = false;
+        this.showFirstLoading = true;
+        this.showSecondLoading = true;
+        this.allMessagesComplete = false;
+        this.waitingForAnalysis = false;
+        this.typedFirstMessage = '';
+        this.typedSecondHeader = '';
+        this.displayText = '';
+        this.rawHtml = '';
+        this.fullSecondBody = 'Идет анализ документа...';
+        setTimeout(() => {
+          this.showFirstLoading = false;
+          this.startFirstTyping();
+        }, 200);
+      }
       this.$nextTick(() => this.scrollToBottom());
+    },
+    prepareFullHtmlImmediate() {
+      // Аналог prepareFullHtml, но без typing - сразу выставляем displayText.
+      try {
+        const cleanText = String(this.fullSecondBody || '').replace(/^[-—*_]{3,}\s*$/gm, '');
+        const fullHtml = this.md ? this.md.render(cleanText) : '<p>Ошибка парсера</p>';
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = fullHtml;
+        const headings = [];
+        tempDiv.querySelectorAll('h2, h3, h4').forEach((tag, idx) => {
+          const level = parseInt(tag.tagName[1]);
+          const text = tag.innerText;
+          const id = `heading-${idx}`;
+          tag.id = id;
+          headings.push({ text, level, id });
+        });
+        this.headings = headings;
+        this.rawHtml = tempDiv.innerHTML;
+        this.displayText = this.rawHtml;
+      } catch (error) {
+        this.displayText = '<p style="color:red">Ошибка при формировании отчёта.</p>';
+      }
     },
 
     // ----- Управление панелью -----
@@ -515,7 +565,10 @@ export default {
     handleScroll() {
       const container = this.$refs.messagesContainer;
       if (!container) return;
-      const nearBottom = container.scrollHeight - (container.scrollTop + container.clientHeight) <= 20;
+      const nearBottom = container.scrollHeight - (container.scrollTop + container.clientHeight) <= 24;
+      // Если пользователь сам отскроллил - выключаем авто-скролл.
+      // Когда возвращается вниз - снова включаем.
+      this.autoScrollEnabled = nearBottom;
       this.showScrollToBottom = !nearBottom && container.scrollHeight > container.clientHeight;
     },
     scrollToHeading(index) {
@@ -531,15 +584,21 @@ export default {
       }
       this.showToc = false;
     },
-    scrollToBottom() {
+    scrollToBottom({ force = false } = {}) {
       const el = this.$refs.messagesContainer;
       if (!el) return;
+      // Если пользователь отскроллил вверх во время стрима - не дёргаем его
+      // вниз автоматически. force=true для явного клика на кнопку.
+      if (!force && !this.autoScrollEnabled) return;
       if (typeof el.scrollTo === 'function') {
-        el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+        el.scrollTo({ top: el.scrollHeight, behavior: force ? 'smooth' : 'auto' });
       } else {
         el.scrollTop = el.scrollHeight;
       }
-      this.showScrollToBottom = false;
+      if (force) {
+        this.autoScrollEnabled = true;
+        this.showScrollToBottom = false;
+      }
     },
 
     // ----- Отправка вопроса -----
@@ -838,8 +897,19 @@ ${pinnedRisk.section ? `- Раздел/пункт: ${pinnedRisk.section}\n` : ''
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
 .chat-history { margin-top: 20px; }
-.chat-message { display: flex; gap: 12px; margin-bottom: 16px; align-items: flex-start; }
-.chat-message--user { flex-direction: row-reverse; }
+.chat-message {
+  display: grid;
+  grid-template-columns: 32px 1fr;
+  column-gap: 12px;
+  row-gap: 6px;
+  margin-bottom: 16px;
+  align-items: start;
+}
+.chat-message--user { grid-template-columns: 1fr 32px; }
+.chat-message--user .chat-message__avatar { grid-column: 2; grid-row: 1; }
+.chat-message--user .chat-message__content { grid-column: 1; grid-row: 1; justify-self: end; }
+.chat-message--user .chat-pinned-risk { grid-column: 1; grid-row: 2; justify-self: end; max-width: 75%; }
+.chat-message--ai .chat-message__content { grid-column: 2; grid-row: 1; }
 .chat-message__avatar {
   flex-shrink: 0;
   width: 32px;

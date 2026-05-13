@@ -8,8 +8,8 @@ vi.mock('@/services/deepseek', () => ({
   DEEPSEEK_MODELS: { CHAT: 'deepseek-chat', REASONER: 'deepseek-reasoner' }
 }))
 
-vi.mock('mammoth', () => ({
-  default: { convertToHtml: vi.fn().mockResolvedValue({ value: '<p>mock</p>' }) }
+vi.mock('docx-preview', () => ({
+  renderAsync: vi.fn().mockResolvedValue(undefined)
 }))
 
 import AnalysisResult from '@/components/AnalysisResult.vue'
@@ -26,7 +26,8 @@ describe('AnalysisResult — начальное состояние', () => {
   it('рендерится без документов и показывает плейсхолдер', () => {
     const { wrapper } = mountAnalysis()
     expect(wrapper.find('.analysis').exists()).toBe(true)
-    expect(wrapper.find('.progress__status').text()).toBe('Загрузите документ(-ы) для начала работы')
+    expect(wrapper.find('.progress__status').text()).toBe('Ожидаю…')
+    expect(wrapper.find('.content__placeholder').text()).toContain('Загрузите документ')
   })
 
   it('progress-bar показывает 0% и нулевую ширину заливки', () => {

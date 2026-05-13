@@ -6,7 +6,7 @@
  */
 
 const DEFAULT_TICK_MS = 1000
-const DEFAULT_TICK_STEP = 2
+const DEFAULT_TICK_STEP = 1
 const DEFAULT_CAP = 99
 
 const STATUS_BUCKETS = Object.freeze([

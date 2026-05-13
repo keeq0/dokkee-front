@@ -42,7 +42,7 @@ test.describe('AnalysisResult: новые фичи', () => {
   test('начальное состояние: AnalysisResult виден, кнопки disabled, статус-плейсхолдер', async ({ page }) => {
     await page.goto('/')
     await expect(page.locator('.analysis')).toBeVisible()
-    await expect(page.locator('.progress__status')).toHaveText('Загрузите документ(-ы) для начала работы')
+    await expect(page.locator('.progress__status')).toHaveText('Ожидаю…')
     await expect(page.locator('.bar__percentage')).toHaveText('0%')
     const buttons = page.locator('.panel__button')
     await expect(buttons).toHaveCount(3)
