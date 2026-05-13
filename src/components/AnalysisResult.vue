@@ -105,39 +105,13 @@
       <div
         class="content__document"
         ref="documentContainer"
-        :style="{ '--preview-font-scale': fontScale }">
-        <div
-          v-if="activeRisk && riskPopoverPosition"
-          class="risk-popover"
-          :class="`risk-popover--${RISK_LEVEL_KEYS[activeRisk.level]}`"
-          :style="{ top: riskPopoverPosition.top + 'px', left: riskPopoverPosition.left + 'px' }"
-          @click.stop>
-          <header class="risk-popover__header">
-            <span class="risk-popover__level">{{ activeRisk.level }}</span>
-            <button type="button" class="risk-popover__close" @click="closeRiskPopover">×</button>
-          </header>
-          <h5 class="risk-popover__title">{{ activeRisk.name }}</h5>
-          <blockquote class="risk-popover__quote">{{ activeRisk.quote }}</blockquote>
-          <p class="risk-popover__comment">{{ activeRisk.comment }}</p>
-          <div class="risk-popover__actions">
-            <button
-              type="button"
-              class="risk-popover__btn"
-              :disabled="!activeRisk.recommendations?.length"
-              @click="recommendationsExpanded = !recommendationsExpanded">
-              {{ recommendationsExpanded ? 'Скрыть' : 'Рекомендации' }}
-              <span v-if="activeRisk.recommendations?.length"> ({{ activeRisk.recommendations.length }})</span>
-            </button>
-            <button
-              type="button"
-              class="risk-popover__btn risk-popover__btn--primary"
-              @click="askAiAboutRisk">
-              Спросить у ИИ
-            </button>
-          </div>
-          <ul v-if="recommendationsExpanded && activeRisk.recommendations?.length" class="risk-popover__recommendations">
-            <li v-for="(rec, idx) in activeRisk.recommendations" :key="idx">{{ rec }}</li>
-          </ul>
+        :style="{ '--preview-font-scale': fontScale }"
+        @mousedown="onContainerMouseDown"
+        @mousemove="onContainerMouseMove"
+        @mouseup="onContainerMouseUp"
+        @mouseleave="onContainerMouseUp">
+        <div v-if="!hasDocument" class="content__placeholder">
+          Загрузите документ(-ы) для начала работы
         </div>
         <div v-if="resizing" class="pdf-loading-overlay">
           <div class="pdf-loading-dots">
@@ -146,6 +120,46 @@
             <div class="pdf-loading-dot"></div>
           </div>
         </div>
+      </div>
+      <div
+        v-if="activeRisk && riskPopoverPosition"
+        class="risk-popover"
+        :class="`risk-popover--${RISK_LEVEL_KEYS[activeRisk.level]}`"
+        :style="{ top: riskPopoverPosition.top + 'px', left: riskPopoverPosition.left + 'px' }"
+        @click.stop>
+        <header class="risk-popover__header">
+          <span class="risk-popover__level">{{ activeRisk.level }}<span v-if="activeRisk.section"> | {{ activeRisk.section }}</span></span>
+          <button type="button" class="risk-popover__close" @click="closeRiskPopover">×</button>
+        </header>
+        <h5 class="risk-popover__title">{{ activeRisk.name }}</h5>
+        <blockquote class="risk-popover__quote">{{ activeRisk.quote }}</blockquote>
+        <p class="risk-popover__comment">{{ activeRisk.comment }}</p>
+        <div class="risk-popover__actions">
+          <button
+            type="button"
+            class="risk-popover__btn"
+            :disabled="!activeRisk.recommendations?.length"
+            @click="recommendationsExpanded = !recommendationsExpanded">
+            {{ recommendationsExpanded ? 'Скрыть' : 'Рекомендации' }}
+            <span v-if="activeRisk.recommendations?.length"> ({{ activeRisk.recommendations.length }})</span>
+          </button>
+          <button
+            type="button"
+            class="risk-popover__btn risk-popover__btn--done"
+            :class="{ 'risk-popover__btn--done-active': activeRisk.completed }"
+            @click="toggleRiskCompleted">
+            {{ activeRisk.completed ? 'Снять статус' : 'Готово' }}
+          </button>
+          <button
+            type="button"
+            class="risk-popover__btn risk-popover__btn--primary"
+            @click="askAiAboutRisk">
+            Спросить у ИИ
+          </button>
+        </div>
+        <ul v-if="recommendationsExpanded && activeRisk.recommendations?.length" class="risk-popover__recommendations">
+          <li v-for="(rec, idx) in activeRisk.recommendations" :key="idx">{{ rec }}</li>
+        </ul>
       </div>
 
       <div class="content__panel" :class="{ 'expanded': expanded }">
@@ -166,7 +180,7 @@
         <div class="ai-assistant__block">
           <button
             class="panel__button ai-assistant"
-            :disabled="!analysisComplete"
+            :disabled="!aiAssistantAvailable"
             @click="toggleAssistant">
             <img src="@/assets/ai_white.svg" class="button__icon" alt=""/>
             <p>ИИ-помощник</p>
@@ -201,9 +215,10 @@
                   v-for="risk in groupedRisks[level]"
                   :key="risks.indexOf(risk)"
                   class="risk-panel__item"
-                  :class="{ 'risk-panel__item--active': activeRiskKey === risks.indexOf(risk) }"
+                  :class="{ 'risk-panel__item--active': activeRiskKey === risks.indexOf(risk), 'risk-panel__item--completed': risk.completed }"
                   @click="selectRisk(risks.indexOf(risk))">
-                  {{ risk.name || risk.quote.slice(0, 40) }}
+                  <span class="risk-panel__item-name">{{ risk.name || risk.quote.slice(0, 40) }}</span>
+                  <span v-if="risk.completed" class="risk-panel__item-badge">Готово</span>
                 </li>
               </ul>
             </section>
@@ -242,7 +257,7 @@ export default {
       default: false
     }
   },
-  emits: ['analysis-complete', 'show-assistant'],
+  emits: ['analysis-complete', 'show-assistant', 'document-changed'],
   data() {
     return {
       totalPages: 0,
@@ -265,6 +280,13 @@ export default {
       riskPopoverPosition: null,
       isExporting: false,
       fontScaleRerenderTimer: null,
+      panState: {
+        active: false,
+        startX: 0,
+        startY: 0,
+        scrollLeft: 0,
+        scrollTop: 0
+      },
       RISK_LEVEL,
       RISK_LEVEL_KEYS
     };
@@ -306,6 +328,11 @@ export default {
     },
     analysisComplete() {
       return this.analysisResult !== null && !this.analysisError && !this.analysisInProgress;
+    },
+    aiAssistantAvailable() {
+      // Кнопка ИИ-помощник активна сразу после старта анализа,
+      // а не только после 100%-завершения.
+      return this.analysisInProgress || this.analysisComplete;
     },
     progressPercent() {
       if (this.analysisComplete) return 100;
@@ -385,20 +412,31 @@ export default {
       this.riskPopoverPosition = null;
     },
     positionRiskPopover(index) {
-      const container = this.$refs.documentContainer;
-      if (!container) return;
-      const mark = container.querySelector(`.risk-highlight[data-risk-id="${index}"]`);
+      // Попап позиционируется относительно .analysis__content (фиксированная
+      // относительно вьюпорта внутри AnalysisResult), чтобы не скроллился вместе
+      // с документом.
+      const analysisContent = this.$el?.querySelector?.('.analysis__content');
+      const docContainer = this.$refs.documentContainer;
+      if (!analysisContent || !docContainer) return;
+      const mark = docContainer.querySelector(`.risk-highlight[data-risk-id="${index}"]`);
       if (!mark) {
         this.riskPopoverPosition = { top: 16, left: 16 };
         return;
       }
       mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      const containerRect = container.getBoundingClientRect();
+      const contentRect = analysisContent.getBoundingClientRect();
       const markRect = mark.getBoundingClientRect();
-      this.riskPopoverPosition = {
-        top: markRect.bottom - containerRect.top + container.scrollTop + 6,
-        left: Math.max(8, Math.min(markRect.left - containerRect.left, container.clientWidth - 320))
-      };
+      const top = Math.max(8, markRect.bottom - contentRect.top + 6);
+      const left = Math.max(8, Math.min(markRect.left - contentRect.left, analysisContent.clientWidth - 340));
+      this.riskPopoverPosition = { top, left };
+    },
+    toggleRiskCompleted() {
+      if (this.activeRiskKey === null) return;
+      const doc = this.selectedDocument;
+      if (!doc) return;
+      const risk = this.risks[this.activeRiskKey];
+      if (!risk) return;
+      this.documentsStore.setRiskCompleted(doc.id, this.activeRiskKey, !risk.completed);
     },
     askAiAboutRisk() {
       if (!this.activeRisk) return;
@@ -408,6 +446,37 @@ export default {
       }
       this.$emit('show-assistant', { risk: this.activeRisk });
       this.closeRiskPopover();
+    },
+    onContainerMouseDown(event) {
+      // Drag-to-pan только при увеличенном масштабе (> 100%) и если кликнули
+      // НЕ по интерактивному элементу (риск-маркер, текст для выделения и т.п.).
+      if (this.fontScale <= 1) return;
+      if (event.button !== 0) return;
+      if (event.target.closest('.risk-highlight, .risk-popover, .pdf-text-layer span, .pdf-text-layer mark')) return;
+      const container = this.$refs.documentContainer;
+      if (!container) return;
+      this.panState.active = true;
+      this.panState.startX = event.clientX;
+      this.panState.startY = event.clientY;
+      this.panState.scrollLeft = container.scrollLeft;
+      this.panState.scrollTop = container.scrollTop;
+      container.classList.add('content__document--panning');
+      event.preventDefault();
+    },
+    onContainerMouseMove(event) {
+      if (!this.panState.active) return;
+      const container = this.$refs.documentContainer;
+      if (!container) return;
+      const dx = event.clientX - this.panState.startX;
+      const dy = event.clientY - this.panState.startY;
+      container.scrollLeft = this.panState.scrollLeft - dx;
+      container.scrollTop = this.panState.scrollTop - dy;
+    },
+    onContainerMouseUp() {
+      if (!this.panState.active) return;
+      this.panState.active = false;
+      const container = this.$refs.documentContainer;
+      if (container) container.classList.remove('content__document--panning');
     },
     getHighlightRoots() {
       const container = this.$refs.documentContainer;
@@ -559,13 +628,23 @@ export default {
       this.analysisControllers.set(doc.id, controller);
       this.documentsStore.setStatus(doc.id, DOCUMENT_STATUS.ANALYZING);
 
+      // Базовая система-сообщение и первый пользовательский промпт сохраняются
+      // в conversation документа, чтобы потом чат-сессия могла обращаться к
+      // этому же контексту.
+      const systemMessage = {
+        role: 'system',
+        content: 'You are a professional document analyst. Always respond in Russian, following the exact formatting instructions.'
+      };
+      const userMessage = {
+        role: 'user',
+        content: buildAnalysisPrompt(text, { options })
+      };
+      this.documentsStore.setConversation(doc.id, [systemMessage, userMessage]);
+
       try {
         const raw = await chatCompletion({
           model: DEEPSEEK_MODELS.REASONER,
-          messages: [
-            { role: 'system', content: 'You are a professional document analyst. Always respond in Russian, following the exact formatting instructions.' },
-            { role: 'user', content: buildAnalysisPrompt(text, { options }) }
-          ],
+          messages: [systemMessage, userMessage],
           temperature: 1.0,
           topP: 0.7,
           maxTokens: 8000,
@@ -576,6 +655,7 @@ export default {
         this.stopEmulatorFor(doc.id);
         this.documentsStore.setRisks(doc.id, risks);
         this.documentsStore.setAnalysisResult(doc.id, report);
+        this.documentsStore.appendConversation(doc.id, { role: 'assistant', content: raw });
         await this.$nextTick();
         if (this.selectedDocument?.id === doc.id) {
           this.applyRiskHighlights();
@@ -597,7 +677,8 @@ export default {
     async extractPdfText(doc) {
       const lib = await this.ensurePdfJs();
       if (!doc?.url || !lib) return '';
-      const loadingTask = lib.getDocument(doc.url);
+      // verbosity: 0 - только ошибки, без TT/font warnings от pdf.js.
+      const loadingTask = lib.getDocument({ url: doc.url, verbosity: 0 });
       const pdf = await loadingTask.promise;
       this.totalPages = pdf.numPages;
       let fullText = '';
@@ -613,7 +694,32 @@ export default {
     async renderDocx(doc) {
       if (!doc?.file) return;
       const arrayBuffer = await doc.file.arrayBuffer();
-      const { value: html } = await mammoth.convertToHtml({ arrayBuffer });
+      // styleMap сохраняет жирность, курсив, заголовки, списки, таблицы как
+      // соответствующие HTML-теги, чтобы форматирование документа отображалось
+      // максимально близко к оригиналу.
+      const { value: html } = await mammoth.convertToHtml(
+        { arrayBuffer },
+        {
+          styleMap: [
+            "p[style-name='Heading 1'] => h1:fresh",
+            "p[style-name='Heading 2'] => h2:fresh",
+            "p[style-name='Heading 3'] => h3:fresh",
+            "p[style-name='Heading 4'] => h4:fresh",
+            "p[style-name='Заголовок 1'] => h1:fresh",
+            "p[style-name='Заголовок 2'] => h2:fresh",
+            "p[style-name='Заголовок 3'] => h3:fresh",
+            "p[style-name='Заголовок 4'] => h4:fresh",
+            "p[style-name='Title'] => h1.title:fresh",
+            "p[style-name='Subtitle'] => h2.subtitle:fresh",
+            "r[style-name='Strong'] => strong",
+            "r[style-name='Emphasis'] => em",
+            "b => strong",
+            "i => em",
+            "u => u"
+          ],
+          includeDefaultStyleMap: true
+        }
+      );
       this.documentsStore.setHtmlPreview(doc.id, html);
 
       const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -640,7 +746,7 @@ export default {
       container.classList.add('pdf-loading');
 
       try {
-        const loadingTask = lib.getDocument(doc.url);
+        const loadingTask = lib.getDocument({ url: doc.url, verbosity: 0 });
         const pdf = await loadingTask.promise;
         this.totalPages = pdf.numPages;
 
@@ -751,11 +857,21 @@ export default {
     },
     'selectedDocument.id': {
       immediate: true,
-      async handler(newId) {
+      async handler(newId, oldId) {
         this.closeRiskPopover();
+        // При смене документа (не первом монтировании) скрываем ассистента -
+        // он покажет уже отчёт нового документа при следующем открытии.
+        if (oldId != null && newId !== oldId) {
+          this.$emit('document-changed', { newId, oldId });
+        }
         if (!newId) {
           this.renderedDocId = null;
           this.totalPages = 0;
+          // Документов не осталось - очищаем просмотрщик.
+          const container = this.$refs.documentContainer;
+          if (container) {
+            container.querySelectorAll('.pdf-page-container, .docx-preview').forEach((el) => el.remove());
+          }
           return;
         }
         await this.$nextTick();
@@ -833,15 +949,38 @@ export default {
   display: flex;
   justify-content: space-between;
   gap: 10px;
+  position: relative;
+  max-height: 500px;
 }
 .content__document {
   width: 100%;
-  height: 500px;
-  overflow: scroll;
+  max-height: 500px;
+  overflow: auto;
+  position: relative;
+  background: #f7f7f9;
+  border-radius: 8px;
+}
+
+.content__document--panning {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.content__placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 320px;
+  padding: 24px;
+  color: #a2a2a2;
+  font-size: 14px;
+  text-align: center;
 }
 
 .expanded .content__document {
-  width: 780px;
+  width: 100%;
+  flex: 1;
 }
 
 .pdf-page-container {
@@ -1467,7 +1606,7 @@ export default {
 
 .risk-panel {
   width: 100%;
-  height: 100%;
+  max-height: 500px;
   border-left: 1px solid #e6e6e6;
   padding: 10px;
   display: flex;
@@ -1533,6 +1672,25 @@ export default {
   background: rgba(255, 255, 255, 0.6);
   border: 1px solid transparent;
   transition: background-color 0.15s ease, border-color 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.risk-panel__item-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.risk-panel__item-badge {
+  font-size: 10px;
+  background: #1f7a1f;
+  color: #fff;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .risk-panel__item:hover {
@@ -1545,6 +1703,18 @@ export default {
   border-color: #6c67fd;
   color: #6c67fd;
   font-weight: 600;
+}
+
+.risk-panel__item--completed {
+  background: rgba(0, 128, 0, 0.12);
+  border-color: rgba(0, 128, 0, 0.35);
+  color: #1f7a1f;
+}
+
+.risk-panel__item--completed.risk-panel__item--active {
+  background: #fff;
+  color: #1f7a1f;
+  border-color: #1f7a1f;
 }
 
 
@@ -1638,6 +1808,18 @@ export default {
   color: #fff;
   border-color: #6c67fd;
 }
+
+.risk-popover__btn--done {
+  background: #fff;
+  color: #1f7a1f;
+  border-color: #1f7a1f;
+}
+.risk-popover__btn--done:hover:not(:disabled) { background: rgba(31, 122, 31, 0.08); }
+.risk-popover__btn--done-active {
+  background: #1f7a1f;
+  color: #fff;
+}
+.risk-popover__btn--done-active:hover:not(:disabled) { background: #156115; }
 .risk-popover__btn--primary:hover:not(:disabled) {
   background: #5854d8;
   border-color: #5854d8;

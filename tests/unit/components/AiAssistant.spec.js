@@ -87,21 +87,58 @@ describe('AiAssistant', () => {
     expect(store.selected.pinnedRisk).toBeNull()
   })
 
-  it('buildContextPrompt включает блок с риском при наличии pinnedRisk', () => {
+  it('buildPinnedPreamble включает блок с риском', () => {
     const { wrapper } = mountAssistant({}, (s) => {
       const rec = createDocumentRecord({ name: 'a.pdf', type: 'pdf' })
       s.add(rec)
       s.select(rec.id)
     })
-    const prompt = wrapper.vm.buildContextPrompt({
+    const prompt = wrapper.vm.buildPinnedPreamble({
       level: 'Большие риски',
       name: 'Штраф 1М',
       quote: 'фиксированная сумма',
-      comment: 'кабальные условия'
+      comment: 'кабальные условия',
+      section: 'п. 4.2'
     })
     expect(prompt).toContain('Штраф 1М')
     expect(prompt).toContain('фиксированная сумма')
     expect(prompt).toContain('Большие риски')
+    expect(prompt).toContain('п. 4.2')
+  })
+
+  it('buildPinnedPreamble возвращает null без риска', () => {
+    const { wrapper } = mountAssistant({}, (s) => {
+      const rec = createDocumentRecord({ name: 'a.pdf', type: 'pdf' })
+      s.add(rec)
+      s.select(rec.id)
+    })
+    expect(wrapper.vm.buildPinnedPreamble(null)).toBeNull()
+  })
+
+  it('пользовательское сообщение с pinnedRisk показывает риск над текстом', async () => {
+    const { wrapper } = mountAssistant({}, (s) => {
+      const rec = createDocumentRecord({ name: 'a.pdf', type: 'pdf' })
+      rec.chatHistory = [
+        {
+          role: 'user',
+          content: 'Расскажи подробнее',
+          pinnedRisk: {
+            level: 'Сомнительно',
+            name: 'Скрытая комиссия',
+            quote: 'комиссия 5%',
+            comment: 'неочевидно'
+          }
+        }
+      ]
+      s.add(rec)
+      s.select(rec.id)
+    })
+    wrapper.vm.allMessagesComplete = true
+    await wrapper.vm.$nextTick()
+    const pinnedInChat = wrapper.find('.chat-pinned-risk--inline')
+    expect(pinnedInChat.exists()).toBe(true)
+    expect(pinnedInChat.text()).toContain('Скрытая комиссия')
+    expect(pinnedInChat.text()).toContain('комиссия 5%')
   })
 
     it.skip('после получения analysisResult отображает второе сообщение', async () => {

@@ -1,9 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   createProgressEmulator,
-  getProgressStatusText,
-  randomBetween,
-  DEFAULT_STAGES
+  getProgressStatusText
 } from '@/composables/useAnalysisProgress'
 
 describe('getProgressStatusText', () => {
@@ -26,14 +24,6 @@ describe('getProgressStatusText', () => {
   })
 })
 
-describe('randomBetween', () => {
-  it('возвращает значение в диапазоне [min, max)', () => {
-    expect(randomBetween(0, 100, () => 0)).toBe(0)
-    expect(randomBetween(0, 100, () => 0.5)).toBe(50)
-    expect(randomBetween(10, 20, () => 0.999)).toBeCloseTo(19.99)
-  })
-})
-
 describe('createProgressEmulator', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -47,77 +37,61 @@ describe('createProgressEmulator', () => {
     expect(() => createProgressEmulator()).toThrow(/onProgress/)
   })
 
-  it('проходит все стадии по очереди', () => {
+  it('тикает раз в секунду, увеличивая прогресс на tickStep', () => {
     const onProgress = vi.fn()
-    const emulator = createProgressEmulator({ onProgress, random: () => 0 })
+    const emulator = createProgressEmulator({ onProgress, tickMs: 1000, tickStep: 2, cap: 10 })
     emulator.start()
-
-    // Каждая стадия — это setTimeout. Прокручиваем все.
-    vi.runAllTimers()
-
-    const calls = onProgress.mock.calls.map((c) => c[0])
-    expect(calls).toEqual(DEFAULT_STAGES.map((s) => s.progress))
-    expect(emulator.isRunning()).toBe(true) // stop вручную после реального завершения
+    // Первый вызов — onProgress(0) при start
+    expect(onProgress).toHaveBeenLastCalledWith(0)
+    vi.advanceTimersByTime(1000)
+    expect(onProgress).toHaveBeenLastCalledWith(2)
+    vi.advanceTimersByTime(1000)
+    expect(onProgress).toHaveBeenLastCalledWith(4)
+    vi.advanceTimersByTime(1000)
+    expect(onProgress).toHaveBeenLastCalledWith(6)
   })
 
-  it('stop останавливает дальнейшие переходы', () => {
+  it('останавливается на cap и не превышает его', () => {
     const onProgress = vi.fn()
-    const emulator = createProgressEmulator({
-      onProgress,
-      stages: [
-        { progress: 10, minDelay: 100, maxDelay: 100 },
-        { progress: 20, minDelay: 100, maxDelay: 100 },
-        { progress: 30, minDelay: 100, maxDelay: 100 }
-      ],
-      random: () => 0
-    })
+    const emulator = createProgressEmulator({ onProgress, tickMs: 100, tickStep: 5, cap: 10 })
+    emulator.start()
+    vi.advanceTimersByTime(1000)
+    const calls = onProgress.mock.calls.map((c) => c[0])
+    expect(Math.max(...calls)).toBe(10)
+    // Дальнейшие тики не выходят за cap.
+    vi.advanceTimersByTime(1000)
+    const callsAfter = onProgress.mock.calls.map((c) => c[0])
+    expect(Math.max(...callsAfter)).toBe(10)
+  })
+
+  it('stop прекращает дальнейшие тики', () => {
+    const onProgress = vi.fn()
+    const emulator = createProgressEmulator({ onProgress, tickMs: 100, tickStep: 5 })
     emulator.start()
     vi.advanceTimersByTime(100)
-    expect(onProgress).toHaveBeenCalledWith(10)
     emulator.stop()
+    const callsBefore = onProgress.mock.calls.length
     vi.advanceTimersByTime(1000)
-    expect(onProgress).toHaveBeenCalledTimes(1)
+    expect(onProgress.mock.calls.length).toBe(callsBefore)
     expect(emulator.isRunning()).toBe(false)
   })
 
   it('повторный start без stop игнорируется', () => {
     const onProgress = vi.fn()
-    const emulator = createProgressEmulator({
-      onProgress,
-      stages: [{ progress: 50, minDelay: 100, maxDelay: 100 }],
-      random: () => 0
-    })
+    const emulator = createProgressEmulator({ onProgress, tickMs: 100, tickStep: 5 })
     emulator.start()
     emulator.start()
     vi.advanceTimersByTime(100)
-    expect(onProgress).toHaveBeenCalledTimes(1)
+    // На старте onProgress(0) и через 100ms - onProgress(5). Итого 2 вызова, не больше.
+    expect(onProgress.mock.calls.length).toBe(2)
   })
 
-  it('задержка первой стадии = minDelay при random=0', () => {
+  it('значения по умолчанию: tickMs=1000, tickStep=2, cap=99', () => {
     const onProgress = vi.fn()
-    const emulator = createProgressEmulator({
-      onProgress,
-      stages: [{ progress: 10, minDelay: 1000, maxDelay: 2000 }],
-      random: () => 0
-    })
+    const emulator = createProgressEmulator({ onProgress })
     emulator.start()
-    vi.advanceTimersByTime(999)
-    expect(onProgress).not.toHaveBeenCalled()
-    vi.advanceTimersByTime(1)
-    expect(onProgress).toHaveBeenCalledWith(10)
-  })
-
-  it('задержка первой стадии = maxDelay при random=1', () => {
-    const onProgress = vi.fn()
-    const emulator = createProgressEmulator({
-      onProgress,
-      stages: [{ progress: 10, minDelay: 1000, maxDelay: 2000 }],
-      random: () => 1
-    })
-    emulator.start()
-    vi.advanceTimersByTime(1999)
-    expect(onProgress).not.toHaveBeenCalled()
-    vi.advanceTimersByTime(1)
-    expect(onProgress).toHaveBeenCalledWith(10)
+    expect(onProgress).toHaveBeenLastCalledWith(0)
+    vi.advanceTimersByTime(1000)
+    expect(onProgress).toHaveBeenLastCalledWith(2)
   })
 })

@@ -92,7 +92,6 @@
       <div
         v-if="allMessagesComplete && chatMessages.length"
         class="chat-history"
-        :key="chatHistoryKey"
       >
         <div
           v-for="(msg, idx) in chatMessages"
@@ -103,7 +102,19 @@
             <img v-if="msg.role === 'user'" src="@/assets/user.png" alt="user" />
             <img v-else src="@/assets/ai.svg" alt="ai" />
           </div>
-          <div class="chat-message__content" v-html="renderMarkdown(msg.content)"></div>
+          <div class="chat-message__content">
+            <div
+              v-if="msg.role === 'user' && msg.pinnedRisk"
+              class="chat-pinned-risk chat-pinned-risk--inline"
+              :class="`chat-pinned-risk--${pinnedRiskLevelKeyOf(msg.pinnedRisk)}`">
+              <div class="chat-pinned-risk__head">
+                <span class="chat-pinned-risk__badge">{{ msg.pinnedRisk.level }}</span>
+              </div>
+              <div class="chat-pinned-risk__title">{{ msg.pinnedRisk.name || msg.pinnedRisk.level }}</div>
+              <blockquote class="chat-pinned-risk__quote">{{ msg.pinnedRisk.quote }}</blockquote>
+            </div>
+            <div v-html="renderMarkdown(msg.content)"></div>
+          </div>
         </div>
       </div>
 
@@ -229,7 +240,6 @@ export default {
       rawHtml: '',
       questionText: '',
       isWaitingForAnswer: false,
-      chatHistoryKey: 0,
       activeStreamer: null,
       pendingPinnedRisk: null
     };
@@ -249,11 +259,7 @@ export default {
       return this.selectedDocument?.pinnedRisk || null;
     },
     pinnedRiskLevelKey() {
-      const level = this.pinnedRisk?.level;
-      if (level === 'Большие риски') return 'danger';
-      if (level === 'Сомнительно') return 'warn';
-      if (level === 'Хорошо') return 'good';
-      return '';
+      return this.pinnedRiskLevelKeyOf(this.pinnedRisk);
     }
   },
   watch: {
@@ -279,16 +285,16 @@ export default {
       }
     },
     selectedDocId(newId, oldId) {
-      // При переключении документа останавливаем стриминг и обновляем ключ
-      // (chatMessages пересоберётся через computed из стора).
-      if (newId !== oldId) {
-        if (this.activeStreamer) {
-          this.activeStreamer.stop({ flush: true });
-          this.activeStreamer = null;
-        }
-        this.chatHistoryKey++;
-        this.$nextTick(() => this.scrollToBottom());
+      // Сбрасываем состояние ассистента только при РЕАЛЬНОЙ смене документа
+      // (oldId уже был определён). При первом монтировании watcher тоже срабатывает
+      // на null -> id, но сбрасывать тут не надо — компонент только инициализируется.
+      if (newId === oldId) return;
+      if (oldId == null) return;
+      if (this.activeStreamer) {
+        this.activeStreamer.stop({ flush: true });
+        this.activeStreamer = null;
       }
+      this.resetForNewDocument();
     }
   },
   created() {
@@ -339,6 +345,47 @@ export default {
         if (m === '>') return '&gt;';
         return m;
       });
+    },
+
+    pinnedRiskLevelKeyOf(risk) {
+      const level = risk?.level;
+      if (level === 'Большие риски') return 'danger';
+      if (level === 'Сомнительно') return 'warn';
+      if (level === 'Хорошо') return 'good';
+      return '';
+    },
+    resetForNewDocument() {
+      // Останавливаем все активные интервалы и сбрасываем флаги.
+      if (this.firstTypingInterval) {
+        clearInterval(this.firstTypingInterval);
+        this.firstTypingInterval = null;
+      }
+      if (this.secondTypingInterval) {
+        clearInterval(this.secondTypingInterval);
+        this.secondTypingInterval = null;
+      }
+      this.firstMessageComplete = false;
+      this.showFirstLoading = true;
+      this.showSecondLoading = true;
+      this.allMessagesComplete = false;
+      this.waitingForAnalysis = false;
+      this.typedFirstMessage = '';
+      this.typedSecondHeader = '';
+      this.displayText = '';
+      this.rawHtml = '';
+      this.headings = [];
+      this.questionText = '';
+      this.isWaitingForAnswer = false;
+      this.showToc = false;
+      this.fullSecondBody = this.analysisError
+        ? 'Анализ недоступен'
+        : this.analysisResult || 'Идет анализ документа...';
+      // Перезапускаем последовательность.
+      setTimeout(() => {
+        this.showFirstLoading = false;
+        this.startFirstTyping();
+      }, 200);
+      this.$nextTick(() => this.scrollToBottom());
     },
 
     // ----- Управление панелью -----
@@ -516,17 +563,22 @@ export default {
       });
       this.questionText = '';
       this.isWaitingForAnswer = true;
-      this.chatHistoryKey++;
       this.$nextTick(() => this.scrollToBottom());
 
       try {
-        const contextPrompt = this.buildContextPrompt(pinned);
-        const historyForApi = this.chatMessages
+        // Используем conversation из стора (полная DeepSeek-сессия документа,
+        // включая system + начальный analysis-промпт + ответ ИИ) +
+        // предыдущие чат-сообщения этого документа + текущий вопрос.
+        // Это позволяет модели помнить полный текст документа и отчёт.
+        const docConversation = this.selectedDocument?.conversation || [];
+        const chatPrior = this.chatMessages
           .slice(0, -1)
           .map((m) => ({ role: m.role, content: m.content }));
+        const pinnedPreamble = pinned ? this.buildPinnedPreamble(pinned) : null;
         const messagesForApi = [
-          { role: 'system', content: contextPrompt },
-          ...historyForApi,
+          ...docConversation,
+          ...chatPrior,
+          ...(pinnedPreamble ? [{ role: 'system', content: pinnedPreamble }] : []),
           { role: 'user', content: text }
         ];
 
@@ -535,12 +587,18 @@ export default {
           temperature: 0.7,
           maxTokens: 2000
         });
+        // Сохраняем пару user+assistant в conversation, чтобы при следующем
+        // вопросе модель видела всю накопленную сессию.
+        this.documentsStore.appendConversation(
+          docId,
+          { role: 'user', content: text },
+          { role: 'assistant', content: answer }
+        );
         this.streamAssistantAnswer(docId, answer);
       } catch (error) {
         let errorMsg = 'Извините, произошла ошибка. Попробуйте позже.';
         if (error.response) errorMsg += ` Код: ${error.response.status}`;
         this.documentsStore.addChatMessage(docId, { role: 'assistant', content: errorMsg });
-        this.chatHistoryKey++;
         this.isWaitingForAnswer = false;
         this.$nextTick(() => this.scrollToBottom());
       }
@@ -553,7 +611,6 @@ export default {
       const history = this.documentsStore.byId(docId)?.chatHistory || [];
       const messageIndex = history.length;
       this.documentsStore.addChatMessage(docId, { role: 'assistant', content: '' });
-      this.chatHistoryKey++;
       this.$nextTick(() => this.scrollToBottom());
 
       const streamer = createTextStreamer({
@@ -566,7 +623,6 @@ export default {
           const arr = item.chatHistory;
           if (!arr || !arr[messageIndex]) return;
           arr[messageIndex].content = partial;
-          this.chatHistoryKey++;
           this.scrollToBottom();
         },
         onDone: () => {
@@ -583,23 +639,14 @@ export default {
       if (docId == null) return;
       this.documentsStore.update(docId, { pinnedRisk: null });
     },
-    buildContextPrompt(pinnedRisk) {
-      const pinnedBlock = pinnedRisk
-        ? `Пользователь задаёт вопрос в контексте конкретного риска:
+    buildPinnedPreamble(pinnedRisk) {
+      if (!pinnedRisk) return null;
+      return `Следующий вопрос пользователя задан в контексте конкретного риска:
 - Уровень: ${pinnedRisk.level}
 - Название: ${pinnedRisk.name}
-- Цитата из документа: "${pinnedRisk.quote}"
-- Комментарий ИИ: ${pinnedRisk.comment}
-Отвечай предметно, опираясь именно на этот фрагмент и его контекст.
-`
-        : '';
-      return `Ты – эксперт по юридическому анализу документов. Пользователь ранее загрузил документ, и ты подготовил подробный отчёт по этому документу. Сейчас пользователь задаёт вопросы, связанные с этим документом, его анализом или юридической тематикой в целом.
-${pinnedBlock}
-Ты можешь использовать следующую информацию (отчёт):
-"""
-${this.fullSecondBody.substring(0, 8000)}
-"""
-Если вопрос не касается документа, отчёта или юридических аспектов, вежливо объясни, что ты специализируешься только на этой теме. Отвечай развёрнуто, ссылаясь на отчёт, если это уместно. Используй Markdown для форматирования ответа.`;
+${pinnedRisk.section ? `- Раздел/пункт: ${pinnedRisk.section}\n` : ''}- Цитата из документа: "${pinnedRisk.quote}"
+- Комментарий по риску: ${pinnedRisk.comment}
+Отвечай предметно, опираясь именно на этот фрагмент и его контекст в документе.`;
     },
 
     // ----- Скачивание отчёта -----
@@ -847,6 +894,19 @@ ${this.fullSecondBody.substring(0, 8000)}
 .chat-pinned-risk--good { border-color: rgba(31, 157, 74, 0.6); }
 .chat-pinned-risk--warn { border-color: rgba(217, 156, 0, 0.6); }
 .chat-pinned-risk--danger { border-color: rgba(208, 64, 64, 0.6); }
+
+.chat-pinned-risk--inline {
+  margin-bottom: 8px;
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  color: #333;
+}
+.chat-pinned-risk--inline .chat-pinned-risk__title { color: #222; }
+.chat-pinned-risk--inline .chat-pinned-risk__quote { color: #555; border-left-color: rgba(0, 0, 0, 0.2); }
+.chat-pinned-risk--inline .chat-pinned-risk__badge { color: #666; }
+.chat-pinned-risk--inline.chat-pinned-risk--good { border-color: rgba(31, 122, 31, 0.4); background: rgba(31, 122, 31, 0.08); }
+.chat-pinned-risk--inline.chat-pinned-risk--warn { border-color: rgba(181, 132, 0, 0.4); background: rgba(255, 200, 0, 0.1); }
+.chat-pinned-risk--inline.chat-pinned-risk--danger { border-color: rgba(196, 48, 48, 0.4); background: rgba(196, 48, 48, 0.08); }
 
 .chat-pinned-risk__head {
   display: flex;

@@ -24,7 +24,8 @@
           ref="analysisResult"
           :expanded="uploadDocumentsCollapsed"
           @analysis-complete="handleAnalysisComplete"
-          @show-assistant="activateAssistant" />
+          @show-assistant="activateAssistant"
+          @document-changed="handleDocumentChanged" />
       </div>
 
       <AiAssistant
@@ -133,6 +134,13 @@ export default {
 
     hideAssistant() {
       this.assistantVisible = false;
+    },
+    handleDocumentChanged() {
+      // При смене документа ассистент скрывается. Если у нового документа есть
+      // анализ — пользователь сам откроет ассистента кнопкой и увидит чат и
+      // отчёт нового документа.
+      this.assistantVisible = false;
+      this.showAssistant = false;
     }
   }
 }
@@ -182,7 +190,7 @@ export default {
 .analysis-container.expanded {
   left: 75px; /* 55px + 20px gap */
   width: calc(100% - 95px); /* 55px + 20px*2 gap */
-  max-width: 900px;
+  max-width: none;
 }
 
 .fade-enter-active, .fade-leave-active {

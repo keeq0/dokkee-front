@@ -2,24 +2,54 @@
  * Подсветка точного вхождения текста в произвольном DOM-узле, в т.ч. когда
  * вхождение пересекает границы дочерних тегов. Используется и для DOCX-превью
  * (mammoth-HTML), и для PDF text-layer (span'ы из pdf.js).
+ *
+ * Текст и запрос нормализуются: все whitespace-последовательности схлопываются
+ * в одиночный пробел, потому что pdf.js дробит строки по span'ам с разными
+ * символами-разделителями, а DeepSeek может вернуть цитату с переносами строк.
  */
 
 const DEFAULT_TAG = 'mark'
+const WS_RE = /\s+/g
 
-function collectTextNodes(root) {
+/**
+ * Собирает текст из root в виде нормализованной строки и одновременно строит
+ * массив "оригинальных" сегментов (TextNode + позиция в исходнике) и параллельно
+ * "нормализованных" позиций — чтобы потом по найденному в нормализованной
+ * строке индексу восстановить Range на исходном DOM.
+ */
+function collectNormalizedTextNodes(root) {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null)
   const items = []
-  let text = ''
+  // Параллельный массив отображений: для каждого исходного offset в node -
+  // соответствующий offset в normalizedText (или -1 если символ был пробельным
+  // и схлопнулся в уже добавленный пробел).
+  let normalizedText = ''
+  let lastWasSpace = true
   let node = walker.nextNode()
   while (node) {
     const value = node.nodeValue ?? ''
-    if (value.length > 0) {
-      items.push({ node, start: text.length, end: text.length + value.length })
-      text += value
+    const map = new Array(value.length)
+    const startNormalized = normalizedText.length
+    for (let i = 0; i < value.length; i++) {
+      const ch = value[i]
+      if (/\s/.test(ch)) {
+        if (lastWasSpace) {
+          map[i] = -1
+        } else {
+          map[i] = normalizedText.length
+          normalizedText += ' '
+          lastWasSpace = true
+        }
+      } else {
+        map[i] = normalizedText.length
+        normalizedText += ch
+        lastWasSpace = false
+      }
     }
+    items.push({ node, map, startNormalized, value })
     node = walker.nextNode()
   }
-  return { text, items }
+  return { text: normalizedText, items }
 }
 
 function applyDataset(el, dataset) {
@@ -30,27 +60,59 @@ function applyDataset(el, dataset) {
   })
 }
 
+function normalizeQuery(q) {
+  return String(q).replace(WS_RE, ' ').trim()
+}
+
 /**
- * Ищет первое вхождение query в текстовом содержимом root и подсвечивает его.
- *
- * mode='wrap' (по умолчанию): оборачивает фрагмент в элемент-обёртку через
- * Range.surroundContents либо Range.extractContents+insertNode для случая
- * пересечения границ тегов. Подходит для inline-HTML (например, DOCX от
- * mammoth).
+ * Находит первое вхождение нормализованного query и восстанавливает Range
+ * на исходных TextNode-ах.
+ */
+function buildRangeFromNormalized(items, normalizedText, needle) {
+  const idx = normalizedText.indexOf(needle)
+  if (idx < 0) return null
+  const endIdx = idx + needle.length
+
+  function findOriginalPosition(targetNormalized, isEnd) {
+    for (const entry of items) {
+      for (let i = 0; i < entry.map.length; i++) {
+        const mapped = entry.map[i]
+        if (mapped < 0) continue
+        if (!isEnd && mapped === targetNormalized) {
+          return { node: entry.node, offset: i }
+        }
+        if (isEnd && mapped === targetNormalized - 1) {
+          return { node: entry.node, offset: i + 1 }
+        }
+      }
+    }
+    return null
+  }
+
+  const start = findOriginalPosition(idx, false)
+  const end = findOriginalPosition(endIdx, true)
+  if (!start || !end) return null
+
+  const range = document.createRange()
+  try {
+    range.setStart(start.node, start.offset)
+    range.setEnd(end.node, end.offset)
+  } catch (error) {
+    return null
+  }
+  return range
+}
+
+/**
+ * mode='wrap': оборачивает в `<tag>` через surroundContents или
+ * extractContents+insertNode. Подходит для DOCX (mammoth-HTML).
  *
  * mode='overlay': создаёт абсолютно позиционированные элементы поверх
- * каждого client-rect фрагмента (Range.getClientRects). Сам DOM не меняется,
- * поэтому подходит для абсолютно позиционированных структур (PDF text-layer
- * от pdf.js).
+ * каждого client-rect. Подходит для PDF text-layer.
  *
  * @param {Element} root
  * @param {string}  query
  * @param {Object}  opts
- * @param {string}  [opts.className]
- * @param {Object<string,string>} [opts.dataset]
- * @param {(event: MouseEvent) => void} [opts.onClick]
- * @param {string}  [opts.tag='mark']
- * @param {'wrap'|'overlay'} [opts.mode='wrap']
  * @returns {Element|Element[]|null}
  */
 export function highlightTextInRoot(root, query, opts = {}) {
@@ -62,28 +124,12 @@ export function highlightTextInRoot(root, query, opts = {}) {
     tag = DEFAULT_TAG,
     mode = 'wrap'
   } = opts
-  const needle = String(query)
+  const needle = normalizeQuery(query)
   if (needle.length < 1) return null
 
-  const { text, items } = collectTextNodes(root)
-  const idx = text.indexOf(needle)
-  if (idx < 0) return null
-  const endIdx = idx + needle.length
-
-  const startEntry = items.find((entry) => idx >= entry.start && idx < entry.end)
-  const endEntry = items.find((entry) => endIdx > entry.start && endIdx <= entry.end)
-  if (!startEntry || !endEntry) return null
-
-  const startOffset = idx - startEntry.start
-  const endOffset = endIdx - endEntry.start
-
-  const range = document.createRange()
-  try {
-    range.setStart(startEntry.node, startOffset)
-    range.setEnd(endEntry.node, endOffset)
-  } catch (error) {
-    return null
-  }
+  const { text, items } = collectNormalizedTextNodes(root)
+  const range = buildRangeFromNormalized(items, text, needle)
+  if (!range) return null
 
   if (mode === 'overlay') {
     return createOverlayHighlights(root, range, { className, dataset, onClick })
@@ -97,7 +143,7 @@ export function highlightTextInRoot(root, query, opts = {}) {
   }
 
   try {
-    if (startEntry.node === endEntry.node) {
+    if (range.startContainer === range.endContainer) {
       range.surroundContents(wrapper)
     } else {
       wrapper.appendChild(range.extractContents())
@@ -106,7 +152,6 @@ export function highlightTextInRoot(root, query, opts = {}) {
   } catch (error) {
     return null
   }
-
   return wrapper
 }
 
@@ -138,8 +183,7 @@ function createOverlayHighlights(root, range, { className, dataset, onClick }) {
 }
 
 /**
- * Разворачивает все элементы по селектору внутри root: их детей перемещает
- * к родителю и удаляет сам элемент. Восстанавливает соседние TextNode'ы.
+ * Разворачивает все элементы по селектору внутри root.
  */
 export function clearHighlights(root, selector) {
   if (!root || !selector) return
