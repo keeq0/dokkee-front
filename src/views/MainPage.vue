@@ -62,7 +62,12 @@ export default {
       processing: false,
       showAssistant: false,
       assistantVisible: false,
-      promptModalOpen: false
+      promptModalOpen: false,
+      // Флаг "первое автооткрытие случилось". Сбрасывается на новой сессии анализа.
+      firstAnalysisAutoOpened: false,
+      // ID документов, для которых пользователь уже видел результат (или анализ
+      // уже завершён) - используется для подавления повторных авто-открытий.
+      analysisDoneSeen: new Set()
     }
   },
   computed: {
@@ -90,10 +95,21 @@ export default {
       }
     });
   },
-    handleAnalysisComplete() {
-      if (this.showAssistant) {
-        this.assistantVisible = true;
+    handleAnalysisComplete(payload) {
+      // payload: { result, error, documentId }
+      const docId = payload?.documentId;
+      if (docId == null) return;
+      if (this.analysisDoneSeen.has(docId)) return;
+      this.analysisDoneSeen.add(docId);
+
+      // Авто-открытие только при первом завершённом документе текущей сессии
+      // И только если ассистент сейчас НЕ открыт. Повторных автооткрытий нет.
+      if (!this.firstAnalysisAutoOpened && !this.showAssistant) {
+        this.firstAnalysisAutoOpened = true;
+        this.activateAssistant();
       }
+      // Если ассистент уже открыт - просто обновляем содержимое (происходит
+      // реактивно через computed analysisResult без принудительных действий).
     },
 
     activateAssistant() {
@@ -110,20 +126,14 @@ export default {
     handlePromptConfirm(options) {
       this.promptModalOpen = false;
       this.processing = true;
+      // Новая сессия анализа - сбрасываем флаги автооткрытия.
+      this.firstAnalysisAutoOpened = false;
+      this.analysisDoneSeen = new Set();
       this.$nextTick(() => {
         if (this.$refs.analysisResult?.startAnalysisForAll) {
           this.$refs.analysisResult.startAnalysisForAll(options);
         }
       });
-      setTimeout(() => {
-        this.activateAssistant();
-        this.assistantVisible = false;
-        this.$nextTick(() => {
-          setTimeout(() => {
-            this.assistantVisible = true;
-          }, 50);
-        });
-      }, 1000);
     },
     handlePromptCancel() {
       this.promptModalOpen = false;
@@ -136,11 +146,9 @@ export default {
       this.assistantVisible = false;
     },
     handleDocumentChanged() {
-      // При смене документа ассистент скрывается. Если у нового документа есть
-      // анализ — пользователь сам откроет ассистента кнопкой и увидит чат и
-      // отчёт нового документа.
-      this.assistantVisible = false;
-      this.showAssistant = false;
+      // При смене документа НЕ скрываем ассистента: он реактивно покажет
+      // отчёт и чат нового документа (через store.selected). Состояние каждого
+      // документа сохраняется per-doc в documents store.
     }
   }
 }
