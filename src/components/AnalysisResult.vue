@@ -106,6 +106,39 @@
         class="content__document"
         ref="documentContainer"
         :style="{ '--preview-font-scale': fontScale }">
+        <div
+          v-if="activeRisk && riskPopoverPosition"
+          class="risk-popover"
+          :class="`risk-popover--${RISK_LEVEL_KEYS[activeRisk.level]}`"
+          :style="{ top: riskPopoverPosition.top + 'px', left: riskPopoverPosition.left + 'px' }"
+          @click.stop>
+          <header class="risk-popover__header">
+            <span class="risk-popover__level">{{ activeRisk.level }}</span>
+            <button type="button" class="risk-popover__close" @click="closeRiskPopover">×</button>
+          </header>
+          <h5 class="risk-popover__title">{{ activeRisk.name }}</h5>
+          <blockquote class="risk-popover__quote">{{ activeRisk.quote }}</blockquote>
+          <p class="risk-popover__comment">{{ activeRisk.comment }}</p>
+          <div class="risk-popover__actions">
+            <button
+              type="button"
+              class="risk-popover__btn"
+              :disabled="!activeRisk.recommendations?.length"
+              @click="recommendationsExpanded = !recommendationsExpanded">
+              {{ recommendationsExpanded ? 'Скрыть' : 'Рекомендации' }}
+              <span v-if="activeRisk.recommendations?.length"> ({{ activeRisk.recommendations.length }})</span>
+            </button>
+            <button
+              type="button"
+              class="risk-popover__btn risk-popover__btn--primary"
+              @click="askAiAboutRisk">
+              Спросить у ИИ
+            </button>
+          </div>
+          <ul v-if="recommendationsExpanded && activeRisk.recommendations?.length" class="risk-popover__recommendations">
+            <li v-for="(rec, idx) in activeRisk.recommendations" :key="idx">{{ rec }}</li>
+          </ul>
+        </div>
         <div v-if="resizing" class="pdf-loading-overlay">
           <div class="pdf-loading-dots">
             <div class="pdf-loading-dot"></div>
@@ -149,7 +182,29 @@
           </button>
         </div>
         <div class="risk-panel">
-
+          <p v-if="!risks.length" class="risk-panel__empty">
+            Риски появятся после анализа документа.
+          </p>
+          <template v-else>
+            <section
+              v-for="level in [RISK_LEVEL.DANGER, RISK_LEVEL.WARN, RISK_LEVEL.GOOD]"
+              :key="level"
+              v-show="groupedRisks[level].length > 0"
+              class="risk-panel__group"
+              :class="`risk-panel__group--${RISK_LEVEL_KEYS[level]}`">
+              <h4 class="risk-panel__group-title">{{ level }} ({{ groupedRisks[level].length }})</h4>
+              <ul class="risk-panel__list">
+                <li
+                  v-for="risk in groupedRisks[level]"
+                  :key="risks.indexOf(risk)"
+                  class="risk-panel__item"
+                  :class="{ 'risk-panel__item--active': activeRiskKey === risks.indexOf(risk) }"
+                  @click="selectRisk(risks.indexOf(risk))">
+                  {{ risk.name || risk.quote.slice(0, 40) }}
+                </li>
+              </ul>
+            </section>
+          </template>
         </div>
       </div>
     </div>
@@ -160,6 +215,13 @@
 import mammoth from 'mammoth';
 import { mapStores } from 'pinia';
 import { chatCompletion, DEEPSEEK_MODELS } from '@/services/deepseek';
+import {
+  buildAnalysisPrompt,
+  parseAnalysisResponse,
+  groupRisksByLevel,
+  RISK_LEVEL,
+  RISK_LEVEL_KEYS
+} from '@/services/risks';
 import { useDocumentsStore, DOCUMENT_STATUS } from '@/stores/documents';
 import {
   createProgressEmulator,
@@ -192,7 +254,12 @@ export default {
       renderedDocId: null,
       analysisControllers: new Map(),
       emulators: new Map(),
-      onDocumentClick: null
+      onDocumentClick: null,
+      activeRiskKey: null,
+      recommendationsExpanded: false,
+      riskPopoverPosition: null,
+      RISK_LEVEL,
+      RISK_LEVEL_KEYS
     };
   },
   computed: {
@@ -256,6 +323,16 @@ export default {
     },
     fontScale() {
       return this.fontScalePercent / 100;
+    },
+    risks() {
+      return this.selectedDocument?.risks || [];
+    },
+    groupedRisks() {
+      return groupRisksByLevel(this.risks);
+    },
+    activeRisk() {
+      if (this.activeRiskKey === null) return null;
+      return this.risks[this.activeRiskKey] || null;
     }
   },
   methods: {
@@ -288,6 +365,86 @@ export default {
     resetFontScale() {
       this.fontScalePercent = 100;
     },
+    selectRisk(index) {
+      this.activeRiskKey = index;
+      this.recommendationsExpanded = false;
+      this.fileSelectorOpen = false;
+      this.fontSizeOpen = false;
+      this.$nextTick(() => this.positionRiskPopover(index));
+    },
+    closeRiskPopover() {
+      this.activeRiskKey = null;
+      this.recommendationsExpanded = false;
+      this.riskPopoverPosition = null;
+    },
+    positionRiskPopover(index) {
+      const container = this.$refs.documentContainer;
+      if (!container) return;
+      const mark = container.querySelector(`mark.risk-highlight[data-risk-id="${index}"]`);
+      if (!mark) {
+        this.riskPopoverPosition = { top: 16, left: 16 };
+        return;
+      }
+      mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const containerRect = container.getBoundingClientRect();
+      const markRect = mark.getBoundingClientRect();
+      this.riskPopoverPosition = {
+        top: markRect.bottom - containerRect.top + container.scrollTop + 6,
+        left: Math.max(8, Math.min(markRect.left - containerRect.left, container.clientWidth - 320))
+      };
+    },
+    askAiAboutRisk() {
+      if (!this.activeRisk) return;
+      const doc = this.selectedDocument;
+      if (doc) {
+        this.documentsStore.update(doc.id, { pinnedRisk: { ...this.activeRisk } });
+      }
+      this.$emit('show-assistant', { risk: this.activeRisk });
+      this.closeRiskPopover();
+    },
+    applyRiskHighlights() {
+      const container = this.$refs.documentContainer?.querySelector('.docx-preview');
+      if (!container) return;
+      this.clearRiskHighlights(container);
+      this.risks.forEach((risk, index) => {
+        if (!risk?.quote || risk.quote.length < 3) return;
+        const levelKey = RISK_LEVEL_KEYS[risk.level];
+        if (!levelKey) return;
+        const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+        let node;
+        while ((node = walker.nextNode())) {
+          const value = node.nodeValue || '';
+          const idx = value.indexOf(risk.quote);
+          if (idx < 0) continue;
+          try {
+            const range = document.createRange();
+            range.setStart(node, idx);
+            range.setEnd(node, idx + risk.quote.length);
+            const mark = document.createElement('mark');
+            mark.className = `risk-highlight risk-highlight--${levelKey}`;
+            mark.dataset.riskId = String(index);
+            mark.addEventListener('click', (event) => {
+              event.stopPropagation();
+              this.selectRisk(index);
+            });
+            range.surroundContents(mark);
+          } catch (error) {
+            // если range пересекает несколько узлов - пропускаем риск
+          }
+          break;
+        }
+      });
+    },
+    clearRiskHighlights(rootEl) {
+      const root = rootEl || this.$refs.documentContainer;
+      if (!root) return;
+      root.querySelectorAll('mark.risk-highlight').forEach((mark) => {
+        const parent = mark.parentNode;
+        while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+        parent.removeChild(mark);
+        if (parent.normalize) parent.normalize();
+      });
+    },
     handleDocumentClick(event) {
       if (this.fontSizeOpen && !this.$refs.fontSizeRoot?.contains(event.target)) {
         this.fontSizeOpen = false;
@@ -296,6 +453,14 @@ export default {
         const fileSelector = this.$el.querySelector?.('.file-selector');
         if (fileSelector && !fileSelector.contains(event.target)) {
           this.fileSelectorOpen = false;
+        }
+      }
+      if (this.activeRiskKey !== null) {
+        const popover = this.$el.querySelector?.('.risk-popover');
+        const isRiskPanel = event.target.closest?.('.risk-panel');
+        const isHighlight = event.target.closest?.('mark.risk-highlight');
+        if (popover && !popover.contains(event.target) && !isRiskPanel && !isHighlight) {
+          this.closeRiskPopover();
         }
       }
     },
@@ -389,62 +554,12 @@ export default {
       this.analysisControllers.set(doc.id, controller);
       this.documentsStore.setStatus(doc.id, DOCUMENT_STATUS.ANALYZING);
 
-      const prompt = `Ты — ведущий эксперт с 15+ годами опыта в анализе юридических, технических и коммерческих документов. Твоя задача — провести многоуровневый аудит, выявляя не только явные, но и скрытые риски, пробелы и возможности для оптимизации.
-
-Критерии качества:
-- Анализ ТОЛЬКО существенных аспектов, способных реально повлиять на правовую/финансовую устойчивость документа.
-- Контекстный подход: учет юрисдикции, отрасли, типа документа и целей сторон.
-- Ссылки на законы (для РФ — ГК РФ, ФЗ; для ЕС — директивы, GDPR; иные юрисдикции — соответствующие НПА).
-- Глубина аргументации: каждый вывод подтверждай ссылками на пункты документа и нормами права.
-
-СТРУКТУРА ОТЧЕТА (обязательна):
-1. КОНТЕКСТУАЛЬНАЯ ПРИВЯЗКА
-1.1. ИДЕНТИФИКАЦИЯ ДОКУМЕНТА
-1.2. ОТРАСЛЕВАЯ СПЕЦИФИКА
-2. ЮРИДИКО-ТЕХНИЧЕСКИЙ АУДИТ
-2.1. ФОРМАЛЬНЫЕ ПАРАМЕТРЫ
-2.2. СТРУКТУРНАЯ ЦЕЛОСТНОСТЬ
-3. СОДЕРЖАТЕЛЬНЫЙ АНАЛИЗ
-3.1. ПОЛОЖИТЕЛЬНЫЕ СТОРОНЫ
-3.2. ЗОНЫ СОМНЕНИЯ (ТРЕБУЮТ УТОЧНЕНИЯ)
-3.3. КРИТИЧЕСКИЕ РИСКИ
-4. ПРАВОВОЙ АУДИТ
-4.1. КОНФЛИКТЫ С ЗАКОНОДАТЕЛЬСТВОМ
-4.2. ПРОБЕЛЫ РЕГУЛИРОВАНИЯ
-5. РИСК-МЕНЕДЖМЕНТ
-5.1. СЦЕНАРНЫЙ АНАЛИЗ
-5.2. ПРИНЦИП «RED FLAG FIRST»
-6. РЕКОМЕНДАЦИИ
-6.1. ОБЯЗАТЕЛЬНЫЕ ИСПРАВЛЕНИЯ
-6.2. СТРАТЕГИЧЕСКИЕ ОПТИМИЗАЦИИ
-6.3. АЛЬТЕРНАТИВНЫЕ РЕШЕНИЯ
-7. ИТОГОВОЕ ЗАКЛЮЧЕНИЕ
-
-ФОРМАТИРОВАНИЕ:
-- Используй **полноценную Markdown-разметку**:
-  * Заголовки разделов: ## Название раздела (второй уровень), ### подраздел (третий уровень).
-  * Для выделения используй **жирный**, *курсив*, ***жирный курсив***.
-  * Списки — маркированные (-) или нумерованные (1.).
-  * Таблицы — в стандартном Markdown-синтаксисе (с | и разделителями). **Рекомендуется использовать таблицы для сравнений и сводок**.
-  * Блоки кода — с тройными обратными кавычками.
-  * Цитаты — с >.
-  * Ссылки — [текст](url).
-- **НЕ ИСПОЛЬЗУЙ эмодзи (смайлики)** ни в коем случае.
-- **НЕ ИСПОЛЬЗУЙ декоративные линии из символов "---", "***" или "___"** — они ломают вёрстку. Вместо них ставь просто пустую строку.
-- **НЕ ИСПОЛЬЗУЙ символы "—" и "*" для выделения** (только для жирного/курсива по правилам Markdown).
-- Оставляй пустые строки между смысловыми блоками для читаемости.
-
-ВАЖНО: Если документ составлен безупречно — укажи это, но предложи профилактические улучшения. НЕ ДОПУСКАЙ гипотетических рисков без прямой связи с контекстом документа.
-
-Документ для анализа:
-${text.substring(0, 15000)}`;
-
       try {
-        const result = await chatCompletion({
+        const raw = await chatCompletion({
           model: DEEPSEEK_MODELS.REASONER,
           messages: [
             { role: 'system', content: 'You are a professional document analyst. Always respond in Russian, following the exact formatting instructions.' },
-            { role: 'user', content: prompt }
+            { role: 'user', content: buildAnalysisPrompt(text) }
           ],
           temperature: 1.0,
           topP: 0.7,
@@ -452,9 +567,15 @@ ${text.substring(0, 15000)}`;
           extra: { max_cot_tokens: 8000 },
           signal: controller.signal
         });
+        const { report, risks } = parseAnalysisResponse(raw);
         this.stopEmulatorFor(doc.id);
-        this.documentsStore.setAnalysisResult(doc.id, result);
-        this.$emit('analysis-complete', { result, error: false, documentId: doc.id });
+        this.documentsStore.setRisks(doc.id, risks);
+        this.documentsStore.setAnalysisResult(doc.id, report);
+        await this.$nextTick();
+        if (doc.type === 'docx' && this.selectedDocument?.id === doc.id) {
+          this.applyRiskHighlights();
+        }
+        this.$emit('analysis-complete', { result: report, error: false, documentId: doc.id });
       } catch (error) {
         this.stopEmulatorFor(doc.id);
         if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') {
@@ -575,6 +696,7 @@ ${text.substring(0, 15000)}`;
     'selectedDocument.id': {
       immediate: true,
       async handler(newId) {
+        this.closeRiskPopover();
         if (!newId) {
           this.renderedDocId = null;
           this.totalPages = 0;
@@ -582,6 +704,9 @@ ${text.substring(0, 15000)}`;
         }
         await this.$nextTick();
         await this.renderSelectedDocument();
+        if (this.selectedDocument?.type === 'docx' && this.risks.length > 0) {
+          this.applyRiskHighlights();
+        }
       }
     }
   },
@@ -1286,5 +1411,208 @@ ${text.substring(0, 15000)}`;
   width: 100%;
   height: 100%;
   border-left: 1px solid #e6e6e6;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+}
+
+.risk-panel__empty {
+  font-size: 11px;
+  color: #a2a2a2;
+  margin: 0;
+}
+
+.risk-panel__group {
+  border-radius: 8px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+}
+
+.risk-panel__group--good {
+  background: rgba(0, 128, 0, 0.05);
+  border-color: rgba(0, 128, 0, 0.18);
+}
+
+.risk-panel__group--warn {
+  background: rgba(255, 217, 0, 0.07);
+  border-color: rgba(255, 184, 0, 0.3);
+}
+
+.risk-panel__group--danger {
+  background: rgba(255, 0, 0, 0.05);
+  border-color: rgba(255, 0, 0, 0.22);
+}
+
+.risk-panel__group-title {
+  font-size: 11px;
+  font-weight: 600;
+  margin: 0 0 6px;
+  color: #333;
+}
+
+.risk-panel__group--good .risk-panel__group-title { color: #1f7a1f; }
+.risk-panel__group--warn .risk-panel__group-title { color: #b58400; }
+.risk-panel__group--danger .risk-panel__group-title { color: #c43030; }
+
+.risk-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.risk-panel__item {
+  font-size: 11px;
+  line-height: 1.3;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #333;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid transparent;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.risk-panel__item:hover {
+  background: #fff;
+  border-color: #d9d9d9;
+}
+
+.risk-panel__item--active {
+  background: #fff;
+  border-color: #6c67fd;
+  color: #6c67fd;
+  font-weight: 600;
+}
+
+.risk-highlight {
+  border-radius: 3px;
+  padding: 0 2px;
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+
+.risk-highlight:hover {
+  filter: brightness(0.95);
+}
+
+.risk-highlight--good {
+  background-color: rgba(0, 200, 0, 0.25);
+}
+
+.risk-highlight--warn {
+  background-color: rgba(255, 200, 0, 0.32);
+}
+
+.risk-highlight--danger {
+  background-color: rgba(255, 70, 70, 0.3);
+}
+
+.risk-popover {
+  position: absolute;
+  z-index: 40;
+  width: 300px;
+  background: #fff;
+  border: 1px solid #e6e6e6;
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14);
+  overflow: hidden;
+  cursor: default;
+}
+
+.risk-popover__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.risk-popover--good .risk-popover__header { background: #1f9d4a; }
+.risk-popover--warn .risk-popover__header { background: #d99c00; }
+.risk-popover--danger .risk-popover__header { background: #d04040; }
+
+.risk-popover__close {
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  opacity: 0.85;
+}
+.risk-popover__close:hover { opacity: 1; }
+
+.risk-popover__title {
+  margin: 8px 12px 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.risk-popover__quote {
+  margin: 4px 12px 6px;
+  padding: 6px 8px;
+  border-left: 3px solid #d9d9d9;
+  background: #f7f7f7;
+  font-size: 11px;
+  font-style: italic;
+  color: #444;
+  max-height: 100px;
+  overflow-y: auto;
+}
+
+.risk-popover__comment {
+  margin: 4px 12px;
+  font-size: 12px;
+  color: #333;
+  line-height: 1.35;
+}
+
+.risk-popover__actions {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid #efefef;
+}
+
+.risk-popover__btn {
+  flex: 1;
+  height: 28px;
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.risk-popover__btn:hover:not(:disabled) { background: #f3f3f3; }
+.risk-popover__btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.risk-popover__btn--primary {
+  background: #6c67fd;
+  color: #fff;
+  border-color: #6c67fd;
+}
+.risk-popover__btn--primary:hover:not(:disabled) {
+  background: #5854d8;
+  border-color: #5854d8;
+}
+
+.risk-popover__recommendations {
+  list-style: disc;
+  padding: 0 12px 10px 28px;
+  margin: 0;
+  font-size: 11px;
+  color: #333;
+  line-height: 1.4;
 }
 </style>
