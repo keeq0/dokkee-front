@@ -1,15 +1,35 @@
 /**
  * Подсветка точного вхождения текста в произвольном DOM-узле, в т.ч. когда
  * вхождение пересекает границы дочерних тегов. Используется и для DOCX-превью
- * (mammoth-HTML), и для PDF text-layer (span'ы из pdf.js).
+ * (docx-preview), и для PDF, отрендеренного в HTML.
  *
- * Текст и запрос нормализуются: все whitespace-последовательности схлопываются
- * в одиночный пробел, потому что pdf.js дробит строки по span'ам с разными
- * символами-разделителями, а DeepSeek может вернуть цитату с переносами строк.
+ * Текст нормализуется:
+ * - NFC + удаление soft-hyphen и zero-width
+ * - унификация тире (-, –, —, −) и кавычек (« » " " „ " ' ')
+ * - схлопывание whitespace в одиночный пробел
+ *
+ * Если точный матч не найден - пробуем case-insensitive вариант. Это покрывает
+ * подавляющее большинство расхождений между DeepSeek-цитатой и реальным
+ * текстом из PDF/DOCX.
  */
 
 const DEFAULT_TAG = 'mark'
 const WS_RE = /\s+/g
+// Soft hyphen, zero-width space/non-joiner/joiner, word-joiner, BOM.
+/* eslint-disable no-irregular-whitespace, no-misleading-character-class */
+const SOFT_HYPHEN_AND_ZW_RE = /[­​‌‍⁠﻿]/g
+// Дефисы и тире: hyphen..horizontal bar, минус, hyphen bullet.
+const DASH_RE = /[‐-―−⁃]/g
+// Кавычки: ёлочки, "smart", "...", одинарные.
+const QUOTE_RE = /[«»“-‟‘-‛]/g
+/* eslint-enable no-irregular-whitespace, no-misleading-character-class */
+
+function normalizeChar(ch) {
+  if (DASH_RE.test(ch)) return '-'
+  if (QUOTE_RE.test(ch)) return '"'
+  if (SOFT_HYPHEN_AND_ZW_RE.test(ch)) return ''
+  return ch
+}
 
 /**
  * Собирает текст из root в виде нормализованной строки и одновременно строит
@@ -20,19 +40,21 @@ const WS_RE = /\s+/g
 function collectNormalizedTextNodes(root) {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null)
   const items = []
-  // Параллельный массив отображений: для каждого исходного offset в node -
-  // соответствующий offset в normalizedText (или -1 если символ был пробельным
-  // и схлопнулся в уже добавленный пробел).
   let normalizedText = ''
   let lastWasSpace = true
   let node = walker.nextNode()
   while (node) {
-    const value = node.nodeValue ?? ''
+    const rawValue = node.nodeValue ?? ''
+    const value = rawValue.normalize ? rawValue.normalize('NFC') : rawValue
     const map = new Array(value.length)
-    const startNormalized = normalizedText.length
     for (let i = 0; i < value.length; i++) {
-      const ch = value[i]
-      if (/\s/.test(ch)) {
+      const orig = value[i]
+      const normCh = normalizeChar(orig)
+      if (normCh === '') {
+        map[i] = -1
+        continue
+      }
+      if (/\s/.test(normCh)) {
         if (lastWasSpace) {
           map[i] = -1
         } else {
@@ -42,11 +64,11 @@ function collectNormalizedTextNodes(root) {
         }
       } else {
         map[i] = normalizedText.length
-        normalizedText += ch
+        normalizedText += normCh
         lastWasSpace = false
       }
     }
-    items.push({ node, map, startNormalized, value })
+    items.push({ node, map, value })
     node = walker.nextNode()
   }
   return { text: normalizedText, items }
@@ -61,15 +83,24 @@ function applyDataset(el, dataset) {
 }
 
 function normalizeQuery(q) {
-  return String(q).replace(WS_RE, ' ').trim()
+  let s = String(q)
+  s = s.normalize ? s.normalize('NFC') : s
+  let out = ''
+  for (const ch of s) out += normalizeChar(ch)
+  return out.replace(WS_RE, ' ').trim()
 }
 
 /**
  * Находит первое вхождение нормализованного query и восстанавливает Range
- * на исходных TextNode-ах.
+ * на исходных TextNode-ах. Если exact не найден - пробует case-insensitive.
  */
 function buildRangeFromNormalized(items, normalizedText, needle) {
-  const idx = normalizedText.indexOf(needle)
+  let idx = normalizedText.indexOf(needle)
+  if (idx < 0) {
+    const lcText = normalizedText.toLowerCase()
+    const lcNeedle = needle.toLowerCase()
+    idx = lcText.indexOf(lcNeedle)
+  }
   if (idx < 0) return null
   const endIdx = idx + needle.length
 

@@ -773,9 +773,12 @@ export default {
     },
 
     async renderPDF(doc) {
-      // PDF рендерится как HTML-текст (как DOCX) - без canvas. Это даёт
-      // единое поведение с docx-preview: одинаковая ширина, font-scale,
-      // выделение текста и color-маркеры рисков через wrap-режим.
+      // PDF рендерится как HTML с СОХРАНЕНИЕМ форматирования:
+      // - bold/italic берутся из styles[fontName].fontFamily (содержит "Bold" / "Italic")
+      // - заголовки определяются по относительному размеру шрифта (item.height)
+      // - параграфы группируются hasEOL, пустые строки - разделители
+      // Единый wrapper .docx-preview - выделение, маркеры и font-scale работают
+      // одинаково с DOCX.
       const lib = await this.ensurePdfJs();
       if (!doc?.url || !lib) return;
       const container = this.$refs.documentContainer;
@@ -788,42 +791,108 @@ export default {
         const wrapper = document.createElement('div');
         wrapper.className = 'docx-preview pdf-as-docx';
         container.appendChild(wrapper);
+
+        // Первый проход: собираем строки всех страниц и статистику размеров.
+        const allPagesLines = [];
+        const fontSizes = [];
         for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
           const page = await pdf.getPage(pageNumber);
-          const textContent = await page.getTextContent();
+          const tc = await page.getTextContent();
+          const styles = tc.styles || {};
+          const lines = [];
+          let cur = [];
+          for (const item of tc.items) {
+            if (item.str) {
+              const family = styles[item.fontName]?.fontFamily || '';
+              const bold = /bold|black|heavy|semibold/i.test(family);
+              const italic = /italic|oblique/i.test(family);
+              const fontSize = item.height || Math.abs(item.transform?.[3] || 0) || 12;
+              fontSizes.push(fontSize);
+              cur.push({ str: item.str, fontSize, bold, italic });
+            }
+            if (item.hasEOL) { lines.push(cur); cur = []; }
+          }
+          if (cur.length) lines.push(cur);
+          allPagesLines.push(lines);
+        }
+        const sortedFs = fontSizes.slice().sort((a, b) => a - b);
+        const baseFs = sortedFs[Math.floor(sortedFs.length / 2)] || 12;
+
+        const appendStyled = (parent, items, headingMode) => {
+          const groups = [];
+          let current = null;
+          for (const it of items) {
+            const isWS = /^\s+$/.test(it.str);
+            const bold = headingMode ? false : (it.bold || (isWS && current?.bold));
+            const italic = it.italic || (isWS && current?.italic);
+            if (current && current.bold === bold && current.italic === italic) {
+              current.text += it.str;
+            } else {
+              current = { text: it.str, bold, italic };
+              groups.push(current);
+            }
+          }
+          for (const g of groups) {
+            let el = document.createTextNode(g.text);
+            if (g.italic) { const e = document.createElement('em'); e.appendChild(el); el = e; }
+            if (g.bold) { const s = document.createElement('strong'); s.appendChild(el); el = s; }
+            parent.appendChild(el);
+          }
+        };
+
+        // Каждая визуальная строка PDF становится отдельным элементом.
+        // Заголовки определяются:
+        // - по относительному размеру шрифта (item.height >= baseFs*1.25)
+        // - либо по жирности целой строки
+        // - либо ALL-CAPS короткой строки (для PDF без bold-фонтов)
+        // - либо префикс "1.", "1.1.", "Раздел N" в короткой строке
+        // Подряд идущие "p"-строки сливаются в один <p>, если предыдущая
+        // не закончилась терминатором предложения (.!?:) - так абзацы из
+        // wrapping'а склеиваются обратно.
+        const SENT_END_RE = /[.!?:;]\s*$/;
+        const NUM_HEADING_RE = /^(\d+\.(\d+\.)*\s+\S|Раздел\s+\d|Глава\s+\d|§\s*\d|статья\s+\d)/i;
+        const isAllCaps = (s) => {
+          const letters = s.replace(/[^A-Za-zА-Яа-яЁёÀ-ÿ]/g, '');
+          if (letters.length < 3) return false;
+          return letters === letters.toUpperCase();
+        };
+        for (let p = 0; p < allPagesLines.length; p++) {
           const pageEl = document.createElement('section');
           pageEl.className = 'docx pdf-page-html';
-          // Группируем items по hasEOL в строки. Пустые строки - разделители
-          // абзацев (отрисовываем доп. margin).
-          let currentLine = [];
-          let lastWasEmpty = false;
-          const flush = () => {
-            const text = currentLine.join('').trim();
-            currentLine = [];
-            if (!text) {
-              if (!lastWasEmpty && pageEl.lastElementChild) {
-                pageEl.lastElementChild.classList.add('pdf-line--break');
-              }
-              lastWasEmpty = true;
-              return;
+          let mergeable = null;
+          for (const line of allPagesLines[p]) {
+            if (line.length === 0) { mergeable = null; continue; }
+            const text = line.map((i) => i.str).join('').trim();
+            if (!text) continue;
+            const maxFs = Math.max(...line.map((i) => i.fontSize));
+            const nonWS = line.filter((i) => !/^\s+$/.test(i.str));
+            const allBold = nonWS.length > 0 && nonWS.every((i) => i.bold);
+            let tag = 'p';
+            const shortLine = text.length < 120;
+            if (maxFs >= baseFs * 1.5) tag = 'h2';
+            else if (maxFs >= baseFs * 1.25) tag = 'h3';
+            else if (allBold && maxFs >= baseFs * 1.05 && shortLine) tag = 'h3';
+            else if (shortLine && isAllCaps(text)) tag = 'h3';
+            else if (shortLine && NUM_HEADING_RE.test(text)) tag = 'h3';
+            if (tag === 'p' && mergeable) {
+              mergeable.appendChild(document.createTextNode(' '));
+              appendStyled(mergeable, line, false);
+              if (SENT_END_RE.test(text)) mergeable = null;
+              continue;
             }
-            const p = document.createElement('p');
-            p.textContent = text;
-            pageEl.appendChild(p);
-            lastWasEmpty = false;
-          };
-          for (const item of textContent.items) {
-            if (item.str) currentLine.push(item.str);
-            if (item.hasEOL) flush();
-          }
-          flush();
-          if (pdf.numPages > 1 && pageNumber < pdf.numPages) {
-            const hr = document.createElement('hr');
-            hr.className = 'pdf-page-break';
-            pageEl.appendChild(hr);
+            const el = document.createElement(tag);
+            appendStyled(el, line, tag !== 'p');
+            pageEl.appendChild(el);
+            mergeable = (tag === 'p' && !SENT_END_RE.test(text)) ? el : null;
           }
           wrapper.appendChild(pageEl);
+          if (p < allPagesLines.length - 1) {
+            const hr = document.createElement('hr');
+            hr.className = 'pdf-page-break';
+            wrapper.appendChild(hr);
+          }
         }
+
         const text = (wrapper.innerText || '').replace(/\s+/g, ' ').trim();
         if (text && !doc.extractedText) {
           this.documentsStore.setExtractedText(doc.id, text);
@@ -965,22 +1034,20 @@ export default {
   justify-content: space-between;
   gap: 10px;
   position: relative;
-  max-height: 500px;
   height: 500px;
   overflow: hidden;
 }
 .content__document-wrap {
   position: relative;
-  flex: 1;
-  min-width: 0;
-  height: 100%;
+  width: 100%;
+  height: 500px;
   overflow: hidden;
   border-radius: 8px;
   background: #fff;
 }
 .content__document {
   width: 100%;
-  height: 100%;
+  height: 500px;
   overflow: auto;
   position: relative;
   background: #fff;
@@ -1025,48 +1092,69 @@ export default {
 .docx-preview.pdf-as-docx {
   font-family: 'PT Sans', Arial, sans-serif;
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 .docx-preview.pdf-as-docx :deep(.pdf-page-html) {
   padding: 0;
-  margin: 0 0 18px 0;
+  margin: 0;
   background: transparent;
   box-shadow: none;
 }
-.docx-preview.pdf-as-docx :deep(.pdf-page-html p) {
-  margin: 0;
-  white-space: pre-wrap;
+.docx-preview.pdf-as-docx :deep(p) {
+  margin: 0.4em 0;
   word-break: break-word;
 }
-.docx-preview.pdf-as-docx :deep(.pdf-line--break) {
-  margin-bottom: 0.8em;
+.docx-preview.pdf-as-docx :deep(h2) {
+  font-size: 1.4em;
+  font-weight: 700;
+  margin: 0.8em 0 0.4em;
+  line-height: 1.25;
 }
+.docx-preview.pdf-as-docx :deep(h3) {
+  font-size: 1.15em;
+  font-weight: 600;
+  margin: 0.6em 0 0.3em;
+  line-height: 1.3;
+}
+.docx-preview.pdf-as-docx :deep(strong) { font-weight: 700; }
+.docx-preview.pdf-as-docx :deep(em) { font-style: italic; }
 .docx-preview.pdf-as-docx :deep(.pdf-page-break) {
   border: none;
   border-top: 1px dashed #d9d9d9;
   margin: 16px 0;
 }
 
-/* Внутренний контейнер docx-preview (.docx). Убираем фиксированную ширину
-   страницы Word и большие margin'ы, чтобы документ адаптировался под
-   доступную ширину viewport'а. */
-.docx-preview :deep(.docx) {
+/* Жёстко убираем большие поля Word-страницы и боковые отступы. Оставляем
+   только минимальный межабзацный margin для читаемости. */
+.docx-preview :deep(.docx),
+.docx-preview :deep(section.docx),
+.docx-preview :deep(article.docx) {
   width: 100% !important;
   max-width: 100% !important;
   min-width: 0 !important;
-  margin: 0 !important;
+  min-height: 0 !important;
+  height: auto !important;
   padding: 0 !important;
+  margin: 0 0 12px 0 !important;
   box-shadow: none !important;
   background: transparent !important;
 }
-.docx-preview :deep(section.docx) {
-  width: 100% !important;
-  max-width: 100% !important;
-  min-width: 0 !important;
+.docx-preview :deep(section.docx > div),
+.docx-preview :deep(section.docx > article),
+.docx-preview :deep(article > div) {
   padding: 0 !important;
-  margin: 0 0 16px 0 !important;
-  box-shadow: none !important;
-  background: transparent !important;
+  margin: 0 !important;
+  width: auto !important;
+  max-width: 100% !important;
+}
+.docx-preview :deep(p:first-child),
+.docx-preview :deep(h1:first-child),
+.docx-preview :deep(h2:first-child),
+.docx-preview :deep(h3:first-child) {
+  margin-top: 0 !important;
+}
+.docx-preview :deep(p:last-child) {
+  margin-bottom: 0 !important;
 }
 .content__panel {
   width: 200px;

@@ -162,7 +162,6 @@ export default {
 
 .upload-documents-container {
   width: 450px;
-  flex-shrink: 0;
   transition: width 0.3s ease;
 }
 
@@ -187,20 +186,20 @@ export default {
 }
 .main-page__content {
   display: flex;
-  gap: 20px;
+  position: relative;
   height: 600px;
-  width: 100%;
 }
 
 .analysis-container {
-  flex: 1;
-  min-width: 0;
+  position: absolute;
+  left: 470px; /* 450px upload + 20px gap */
+  width: 620px;
   transition: all 0.3s ease;
 }
 
 .analysis-container.expanded {
-  flex: 1;
-  width: 100%;
+  left: 75px; /* 55px collapsed + 20px gap */
+  width: calc(100% - 95px);
   max-width: none;
 }
 

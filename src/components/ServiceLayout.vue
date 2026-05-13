@@ -19,11 +19,9 @@
   .layout {
     margin: 0 auto;
     display: flex;
-    width: 100%;
-    max-width: none;
-    padding: 50px 50px 0;
+    width: 1250px;
+    padding-top: 50px;
     gap: 50px;
-    box-sizing: border-box;
   }
   </style>
   
