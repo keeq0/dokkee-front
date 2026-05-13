@@ -26,40 +26,72 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  # Unit-тесты в watch-режиме (vitest сам перезапускается при изменениях).
+  # Контейнер всегда запущен; смотреть логи: docker compose logs -f test-unit
   test-unit:
     build:
       context: .
       target: test
-    profiles: ["test"]
+    container_name: dokkee-test-unit
     volumes:
       - ./src:/app/src
       - ./tests:/app/tests
       - ./vitest.config.js:/app/vitest.config.js
-    command: ["npm", "run", "test:unit"]
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+    command: ["npx", "vitest"]
+    restart: unless-stopped
+    init: true
 
+  # Lint в watch-режиме через chokidar-cli (eslint без нативного watch).
+  # Контейнер всегда запущен; смотреть логи: docker compose logs -f test-lint
+  test-lint:
+    build:
+      context: .
+      target: test
+    container_name: dokkee-test-lint
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+      - SHELL=/bin/sh
+    command: ["npm", "run", "lint:watch"]
+    restart: unless-stopped
+    init: true
+
+  # E2E в watch-режиме: при изменении src/tests прогоняется playwright (1.5s debounce).
+  # Зависит от healthy frontend.
   test-e2e:
     build:
       context: .
       target: e2e
-    profiles: ["test"]
+    container_name: dokkee-test-e2e
     depends_on:
       frontend:
         condition: service_healthy
     volumes:
-      # При локальной разработке тестов изменения подхватываются без ребилда.
+      - ./src:/e2e/src
       - ./tests/e2e:/e2e/tests/e2e
       - ./playwright.config.js:/e2e/playwright.config.js
-      # Артефакты пишутся на хост.
       - ./playwright-report:/e2e/playwright-report
       - ./test-results:/e2e/test-results
+      - ./package.json:/e2e/package.json
     environment:
       - BASE_URL=http://frontend:8080
       - CI=1
+      - CHOKIDAR_USEPOLLING=true
+      - SHELL=/bin/bash
+    command: ["npm", "run", "test:e2e:watch"]
+    restart: unless-stopped
+    init: true
+
+  # Профильный build-check для CI/ручной проверки сборки.
   build-check:
     build:
       context: .
       target: test
-    profiles: ["test"]
+    profiles: ["build"]
     volumes:
       - ./src:/app/src
       - ./public:/app/public
@@ -67,12 +99,3 @@ services:
       - ./vue.config.js:/app/vue.config.js
       - ./jsconfig.json:/app/jsconfig.json
     command: ["npm", "run", "build"]
-  test-lint:
-    build:
-      context: .
-      target: test
-    profiles: ["test"]
-    volumes:
-      - ./src:/app/src
-      - ./tests:/app/tests
-    command: ["npm", "run", "lint"]

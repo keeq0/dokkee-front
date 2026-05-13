@@ -60,7 +60,7 @@ jobs:
         with:
           cache-from    : type=gha
           cache-to      : type=gha,mode=max
-      - run : docker compose --profile test run --rm test-lint
+      - run : docker compose run --rm test-lint npm run lint
 
   # ------------------------------------------------------------
   unit:
@@ -75,7 +75,7 @@ jobs:
         with:
           cache-from    : type=gha
           cache-to      : type=gha,mode=max
-      - run : docker compose --profile test run --rm test-unit
+      - run : docker compose run --rm test-unit npm run test:unit
 
   # ------------------------------------------------------------
   frontend-build:
@@ -117,7 +117,7 @@ jobs:
             sleep 2
           done
       - name: Run e2e tests
-        run : docker compose --profile test run --rm test-e2e
+        run : docker compose run --rm test-e2e npx playwright test
       - name: Upload Playwright report
         if   : always()
         uses: actions/upload-artifact@v4
