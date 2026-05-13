@@ -2,7 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createTestingPinia } from '@pinia/testing'
 import { useDocumentsStore, createDocumentRecord } from '@/stores/documents'
+
+vi.mock('@/services/reportExport', () => ({
+  downloadAnalysisReport: vi.fn().mockResolvedValue(undefined)
+}))
+
 import AiAssistant from '@/components/AiAssistant.vue'
+import { downloadAnalysisReport } from '@/services/reportExport'
 
 function mountAssistant(props = {}, setup) {
   const pinia = createTestingPinia({ stubActions: false })
@@ -120,13 +126,19 @@ describe('AiAssistant', () => {
     expect(wrapper.find('.footer__button.report').classes()).toContain('visible')
   })
 
-  it('метод downloadReport создаёт PDF и вызывает сохранение', async () => {
-    const { wrapper } = mountAssistant()
-    const mockSave = vi.fn()
-    const mockPdf = { addImage: vi.fn(), addPage: vi.fn(), save: mockSave }
-    const { default: jsPDF } = await import('jspdf')
-    jsPDF.mockImplementation(() => mockPdf)
+  it('метод downloadReport вызывает сервис reportExport с отчётом из стора', async () => {
+    const { wrapper } = mountAssistant({}, (s) => {
+      const rec = createDocumentRecord({ name: 'contract.pdf', type: 'pdf' })
+      s.add(rec)
+      s.select(rec.id)
+      s.setAnalysisResult(rec.id, '## Отчёт\n\nТекст')
+    })
+    downloadAnalysisReport.mockClear()
     await wrapper.vm.downloadReport()
-    expect(mockSave).toHaveBeenCalled()
+    expect(downloadAnalysisReport).toHaveBeenCalledOnce()
+    const args = downloadAnalysisReport.mock.calls[0][0]
+    expect(args.markdown).toContain('Отчёт')
+    expect(args.title).toContain('contract.pdf')
+    expect(args.filename).toContain('report-contract')
   })
 })

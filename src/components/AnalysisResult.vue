@@ -177,8 +177,11 @@
           <button class="panel__button save" :disabled="!analysisComplete">
             <p>Сохранить</p>
           </button>
-          <button class="panel__button save" :disabled="!analysisComplete">
-            <p>Скачать отчёт</p>
+          <button
+            class="panel__button save"
+            :disabled="!analysisComplete || isExporting"
+            @click="downloadReport">
+            <p>{{ isExporting ? 'Готовлю...' : 'Скачать отчёт' }}</p>
           </button>
         </div>
         <div class="risk-panel">
@@ -215,6 +218,7 @@
 import mammoth from 'mammoth';
 import { mapStores } from 'pinia';
 import { chatCompletion, DEEPSEEK_MODELS } from '@/services/deepseek';
+import { downloadAnalysisReport } from '@/services/reportExport';
 import {
   buildAnalysisPrompt,
   parseAnalysisResponse,
@@ -258,6 +262,7 @@ export default {
       activeRiskKey: null,
       recommendationsExpanded: false,
       riskPopoverPosition: null,
+      isExporting: false,
       RISK_LEVEL,
       RISK_LEVEL_KEYS
     };
@@ -672,6 +677,23 @@ export default {
     },
     toggleAssistant() {
       this.$emit('show-assistant');
+    },
+    async downloadReport() {
+      const doc = this.selectedDocument;
+      if (!doc?.analysisResult || this.isExporting) return;
+      this.isExporting = true;
+      try {
+        await downloadAnalysisReport({
+          title: `Отчёт анализа: ${doc.name}`,
+          markdown: doc.analysisResult,
+          filename: `report-${doc.name.replace(/\.[^.]+$/, '')}`,
+          meta: `Сгенерировано Dockee, ${new Date().toLocaleString('ru-RU')}`
+        });
+      } catch (error) {
+        console.error('Не удалось скачать отчёт:', error?.message || error);
+      } finally {
+        this.isExporting = false;
+      }
     },
 
     async updatePdfSize() {

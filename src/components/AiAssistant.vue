@@ -176,11 +176,10 @@
 </template>
 
 <script>
-import html2canvas from 'html2canvas';
-import jsPDF from 'jspdf';
 import MarkdownIt from 'markdown-it';
 import { mapStores } from 'pinia';
 import { chatCompletion } from '@/services/deepseek';
+import { downloadAnalysisReport } from '@/services/reportExport';
 import { useDocumentsStore } from '@/stores/documents';
 import { createTextStreamer } from '@/composables/useStreamingText';
 
@@ -605,111 +604,18 @@ ${this.fullSecondBody.substring(0, 8000)}
 
     // ----- Скачивание отчёта -----
     async downloadReport() {
+      const markdown = this.selectedDocument?.analysisResult || this.fullSecondBody;
+      if (!markdown) return;
+      const docName = this.selectedDocument?.name || 'document';
       try {
-        const reportContent = document.createElement('div');
-        reportContent.style.cssText = `
-          width: 794px;
-          min-height: 1123px;
-          padding: 50px;
-          background: white;
-          color: black;
-          font-family: 'Arial', sans-serif;
-          box-sizing: border-box;
-          position: fixed;
-          top: -10000px;
-          left: -10000px;
-          z-index: 10000;
-        `;
-
-        const title = document.createElement('h1');
-        title.textContent = 'Отчёт анализа документа';
-        title.style.cssText = `
-          font-size: 32px;
-          font-weight: bold;
-          margin-bottom: 40px;
-          text-align: left;
-          color: #2c3e50;
-          border-bottom: 2px solid #6C67FD;
-          padding-bottom: 15px;
-        `;
-        reportContent.appendChild(title);
-
-        const metaInfo = document.createElement('div');
-        metaInfo.style.cssText = `
-          margin-bottom: 30px;
-          padding: 15px;
-          background: #f8f9fa;
-          border-radius: 8px;
-          font-size: 14px;
-          color: #666;
-          text-align: left;
-        `;
-        metaInfo.innerHTML = `
-          <div><strong>Дата:</strong> ${new Date().toLocaleDateString('ru-RU')}</div>
-          <div><strong>Время:</strong> ${new Date().toLocaleTimeString('ru-RU')}</div>
-          <div><strong>Статус:</strong> Анализ успешно завершен</div>
-        `;
-        reportContent.appendChild(metaInfo);
-
-        const contentWrapper = document.createElement('div');
-        const cleanForPdf = this.fullSecondBody.replace(/^[-—*_]{3,}\s*$/gm, '');
-        contentWrapper.innerHTML = this.md.render(cleanForPdf);
-        reportContent.appendChild(contentWrapper);
-
-        const signature = document.createElement('div');
-        signature.style.cssText = `
-          margin-top: 50px;
-          padding-top: 20px;
-          border-top: 1px solid #eee;
-          text-align: left;
-          font-size: 12px;
-          color: #888;
-        `;
-        signature.innerHTML = `
-          <div>Сгенерировано ИИ-помощником</div>
-          <div>Dokkee</div>
-        `;
-        reportContent.appendChild(signature);
-
-        document.body.appendChild(reportContent);
-
-        const canvas = await html2canvas(reportContent, {
-          scale: 2,
-          useCORS: true,
-          backgroundColor: '#ffffff',
-          logging: false
+        await downloadAnalysisReport({
+          title: `Отчёт анализа: ${docName}`,
+          markdown,
+          filename: `report-${docName.replace(/\.[^.]+$/, '')}-${new Date().toISOString().slice(0, 10)}`,
+          meta: `Сгенерировано Dockee, ${new Date().toLocaleString('ru-RU')}`
         });
-
-        document.body.removeChild(reportContent);
-
-        const imgData = canvas.toDataURL('image/png');
-        const pdf = new jsPDF({
-          orientation: 'portrait',
-          unit: 'mm',
-          format: 'a4'
-        });
-
-        const imgWidth = 210;
-        const pageHeight = 297;
-        const imgHeight = (canvas.height * imgWidth) / canvas.width;
-
-        let heightLeft = imgHeight;
-        let position = 0;
-
-        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-        heightLeft -= pageHeight;
-
-        while (heightLeft >= 0) {
-          position = heightLeft - imgHeight;
-          pdf.addPage();
-          pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-          heightLeft -= pageHeight;
-        }
-
-        pdf.save(`Отчет_анализа_${new Date().toISOString().slice(0, 10)}.pdf`);
       } catch (error) {
-        console.error('Ошибка при создании PDF:', error);
-        alert('Не удалось создать PDF отчёт. Пожалуйста, попробуйте еще раз.');
+        console.error('Ошибка при создании PDF:', error?.message || error);
       }
     }
   }
