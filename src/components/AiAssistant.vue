@@ -128,10 +128,24 @@
 
     <!-- Поле ввода сообщений -->
     <div class="chat-input-area" v-if="allMessagesComplete">
+      <div v-if="pinnedRisk" class="chat-pinned-risk" :class="`chat-pinned-risk--${pinnedRiskLevelKey}`">
+        <div class="chat-pinned-risk__head">
+          <span class="chat-pinned-risk__badge">Спрашиваешь о риске</span>
+          <button
+            type="button"
+            class="chat-pinned-risk__close"
+            aria-label="Убрать закреплённый риск"
+            @click="clearPinnedRisk">
+            ×
+          </button>
+        </div>
+        <div class="chat-pinned-risk__title">{{ pinnedRisk.name || pinnedRisk.level }}</div>
+        <blockquote class="chat-pinned-risk__quote">{{ pinnedRisk.quote }}</blockquote>
+      </div>
       <textarea
         v-model="questionText"
         class="chat-input"
-        placeholder="Задайте вопрос ИИ-помощнику"
+        :placeholder="pinnedRisk ? 'Спросите о закреплённом риске' : 'Задайте вопрос ИИ-помощнику'"
         :disabled="isWaitingForAnswer"
         rows="3"
         @keydown.enter.prevent="sendQuestion"
@@ -165,7 +179,10 @@
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import MarkdownIt from 'markdown-it';
+import { mapStores } from 'pinia';
 import { chatCompletion } from '@/services/deepseek';
+import { useDocumentsStore } from '@/stores/documents';
+import { createTextStreamer } from '@/composables/useStreamingText';
 
 export default {
   name: 'AiAssistant',
@@ -211,11 +228,34 @@ export default {
       headings: [],
       showToc: false,
       rawHtml: '',
-      chatMessages: [],
       questionText: '',
       isWaitingForAnswer: false,
-      chatHistoryKey: 0
+      chatHistoryKey: 0,
+      activeStreamer: null,
+      pendingPinnedRisk: null
     };
+  },
+  computed: {
+    ...mapStores(useDocumentsStore),
+    selectedDocument() {
+      return this.documentsStore.selected;
+    },
+    selectedDocId() {
+      return this.selectedDocument?.id ?? null;
+    },
+    chatMessages() {
+      return this.selectedDocument?.chatHistory || [];
+    },
+    pinnedRisk() {
+      return this.selectedDocument?.pinnedRisk || null;
+    },
+    pinnedRiskLevelKey() {
+      const level = this.pinnedRisk?.level;
+      if (level === 'Большие риски') return 'danger';
+      if (level === 'Сомнительно') return 'warn';
+      if (level === 'Хорошо') return 'good';
+      return '';
+    }
   },
   watch: {
     visible(newVal) {
@@ -239,11 +279,16 @@ export default {
         this.fullSecondBody = 'Анализ недоступен';
       }
     },
-    documentUrl(newUrl, oldUrl) {
-      // Сброс чата при смене документа
-      if (newUrl && newUrl !== oldUrl) {
-        this.chatMessages = [];
+    selectedDocId(newId, oldId) {
+      // При переключении документа останавливаем стриминг и обновляем ключ
+      // (chatMessages пересоберётся через computed из стора).
+      if (newId !== oldId) {
+        if (this.activeStreamer) {
+          this.activeStreamer.stop({ flush: true });
+          this.activeStreamer = null;
+        }
         this.chatHistoryKey++;
+        this.$nextTick(() => this.scrollToBottom());
       }
     }
   },
@@ -273,6 +318,10 @@ export default {
     window.removeEventListener('resize', this.updateMaxWidth);
     if (this.firstTypingInterval) clearInterval(this.firstTypingInterval);
     if (this.secondTypingInterval) clearInterval(this.secondTypingInterval);
+    if (this.activeStreamer) {
+      this.activeStreamer.stop({ flush: false });
+      this.activeStreamer = null;
+    }
   },
   methods: {
     // ----- Рендеринг Markdown -----
@@ -437,13 +486,14 @@ export default {
       this.showToc = false;
     },
     scrollToBottom() {
-      if (this.$refs.messagesContainer) {
-        this.$refs.messagesContainer.scrollTo({
-          top: this.$refs.messagesContainer.scrollHeight,
-          behavior: 'smooth'
-        });
-        this.showScrollToBottom = false;
+      const el = this.$refs.messagesContainer;
+      if (!el) return;
+      if (typeof el.scrollTo === 'function') {
+        el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+      } else {
+        el.scrollTop = el.scrollHeight;
       }
+      this.showScrollToBottom = false;
     },
 
     // ----- Отправка вопроса -----
@@ -451,20 +501,30 @@ export default {
       if (!this.allMessagesComplete || this.isWaitingForAnswer) return;
       const text = this.questionText.trim();
       if (!text) return;
+      const docId = this.selectedDocId;
+      if (docId == null) return;
 
-      const userMsg = { role: 'user', content: text };
-      this.chatMessages = [...this.chatMessages, userMsg];
+      const pinned = this.pinnedRisk;
+      this.pendingPinnedRisk = pinned;
+      if (pinned) {
+        this.documentsStore.update(docId, { pinnedRisk: null });
+      }
+
+      this.documentsStore.addChatMessage(docId, {
+        role: 'user',
+        content: text,
+        pinnedRisk: pinned ? { ...pinned } : null
+      });
       this.questionText = '';
       this.isWaitingForAnswer = true;
       this.chatHistoryKey++;
       this.$nextTick(() => this.scrollToBottom());
 
       try {
-        const contextPrompt = this.buildContextPrompt();
-        const historyForApi = this.chatMessages.slice(0, -1).map((m) => ({
-          role: m.role,
-          content: m.content
-        }));
+        const contextPrompt = this.buildContextPrompt(pinned);
+        const historyForApi = this.chatMessages
+          .slice(0, -1)
+          .map((m) => ({ role: m.role, content: m.content }));
         const messagesForApi = [
           { role: 'system', content: contextPrompt },
           ...historyForApi,
@@ -476,23 +536,66 @@ export default {
           temperature: 0.7,
           maxTokens: 2000
         });
-        const assistantMsg = { role: 'assistant', content: answer };
-        this.chatMessages = [...this.chatMessages, assistantMsg];
-        this.chatHistoryKey++;
-        this.$nextTick(() => this.scrollToBottom());
+        this.streamAssistantAnswer(docId, answer);
       } catch (error) {
         let errorMsg = 'Извините, произошла ошибка. Попробуйте позже.';
         if (error.response) errorMsg += ` Код: ${error.response.status}`;
-        this.chatMessages = [...this.chatMessages, { role: 'assistant', content: errorMsg }];
+        this.documentsStore.addChatMessage(docId, { role: 'assistant', content: errorMsg });
         this.chatHistoryKey++;
-        this.$nextTick(() => this.scrollToBottom());
-      } finally {
         this.isWaitingForAnswer = false;
         this.$nextTick(() => this.scrollToBottom());
       }
     },
-    buildContextPrompt() {
+    streamAssistantAnswer(docId, fullText) {
+      if (this.activeStreamer) {
+        this.activeStreamer.stop({ flush: true });
+        this.activeStreamer = null;
+      }
+      const history = this.documentsStore.byId(docId)?.chatHistory || [];
+      const messageIndex = history.length;
+      this.documentsStore.addChatMessage(docId, { role: 'assistant', content: '' });
+      this.chatHistoryKey++;
+      this.$nextTick(() => this.scrollToBottom());
+
+      const streamer = createTextStreamer({
+        content: fullText,
+        chunkSize: 4,
+        delay: 18,
+        onUpdate: (partial) => {
+          const item = this.documentsStore.byId(docId);
+          if (!item) return;
+          const arr = item.chatHistory;
+          if (!arr || !arr[messageIndex]) return;
+          arr[messageIndex].content = partial;
+          this.chatHistoryKey++;
+          this.scrollToBottom();
+        },
+        onDone: () => {
+          this.activeStreamer = null;
+          this.isWaitingForAnswer = false;
+          this.$nextTick(() => this.scrollToBottom());
+        }
+      });
+      this.activeStreamer = streamer;
+      streamer.start();
+    },
+    clearPinnedRisk() {
+      const docId = this.selectedDocId;
+      if (docId == null) return;
+      this.documentsStore.update(docId, { pinnedRisk: null });
+    },
+    buildContextPrompt(pinnedRisk) {
+      const pinnedBlock = pinnedRisk
+        ? `Пользователь задаёт вопрос в контексте конкретного риска:
+- Уровень: ${pinnedRisk.level}
+- Название: ${pinnedRisk.name}
+- Цитата из документа: "${pinnedRisk.quote}"
+- Комментарий ИИ: ${pinnedRisk.comment}
+Отвечай предметно, опираясь именно на этот фрагмент и его контекст.
+`
+        : '';
       return `Ты – эксперт по юридическому анализу документов. Пользователь ранее загрузил документ, и ты подготовил подробный отчёт по этому документу. Сейчас пользователь задаёт вопросы, связанные с этим документом, его анализом или юридической тематикой в целом.
+${pinnedBlock}
 Ты можешь использовать следующую информацию (отчёт):
 """
 ${this.fullSecondBody.substring(0, 8000)}
@@ -812,7 +915,8 @@ ${this.fullSecondBody.substring(0, 8000)}
 @keyframes blink { 0% { opacity: 0.2; } 50% { opacity: 1; } 100% { opacity: 0.2; } }
 
 .chat-input-area {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto;
   align-items: center;
   gap: 10px;
   margin-top: 10px;
@@ -820,6 +924,63 @@ ${this.fullSecondBody.substring(0, 8000)}
   background: transparent;
   width: 100%;
   flex-shrink: 0;
+}
+
+.chat-pinned-risk {
+  grid-column: 1 / -1;
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chat-pinned-risk--good { border-color: rgba(31, 157, 74, 0.6); }
+.chat-pinned-risk--warn { border-color: rgba(217, 156, 0, 0.6); }
+.chat-pinned-risk--danger { border-color: rgba(208, 64, 64, 0.6); }
+
+.chat-pinned-risk__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.chat-pinned-risk__badge {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #c8c8e8;
+}
+
+.chat-pinned-risk__close {
+  background: transparent;
+  border: none;
+  color: #c8c8e8;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.chat-pinned-risk__close:hover { color: #fff; }
+
+.chat-pinned-risk__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.chat-pinned-risk__quote {
+  margin: 0;
+  font-size: 12px;
+  font-style: italic;
+  color: #c8c8e8;
+  border-left: 2px solid rgba(255, 255, 255, 0.25);
+  padding-left: 8px;
+  max-height: 60px;
+  overflow-y: auto;
 }
 .chat-input {
   width: 100%;
