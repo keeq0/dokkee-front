@@ -36,7 +36,11 @@ export function createDocumentRecord({ file = null, name = '', type = null, url 
     analysisError: false,
     risks: [],
     pinnedRisk: null,
-    chatHistory: []
+    chatHistory: [],
+    // conversation - полная история сообщений DeepSeek для этого документа
+    // (начальный analysis-промпт + ответ + последующие чат-сообщения).
+    // Используется чтобы модель помнила контекст документа и отчёт при чате.
+    conversation: []
   }
 }
 
@@ -124,6 +128,24 @@ export const useDocumentsStore = defineStore('documents', {
     },
     setChatHistory(id, history) {
       return this.update(id, { chatHistory: history })
+    },
+    setConversation(id, conversation) {
+      return this.update(id, { conversation })
+    },
+    appendConversation(id, ...messages) {
+      const item = this.items.find((i) => i.id === id)
+      if (!item) return null
+      if (!Array.isArray(item.conversation)) item.conversation = []
+      messages.filter(Boolean).forEach((m) => item.conversation.push(m))
+      return item
+    },
+    setRiskCompleted(id, riskIndex, completed = true) {
+      const item = this.items.find((i) => i.id === id)
+      if (!item || !Array.isArray(item.risks)) return null
+      const risk = item.risks[riskIndex]
+      if (!risk) return null
+      risk.completed = completed
+      return item
     },
     reset() {
       this.items.forEach((item) => {

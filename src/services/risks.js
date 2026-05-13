@@ -60,7 +60,8 @@ ${RISKS_OPEN_TAG}
 [
   {
     "level": "Хорошо" | "Сомнительно" | "Большие риски",
-    "name": "краткое название риска (до 6 слов)",
+    "name": "п. X.Y - краткое название риска (до 6 слов)",
+    "section": "п. X.Y (или раздел/название)",
     "quote": "точная цитата из документа, как в исходнике (без сокращений и перефразирования)",
     "comment": "пояснение от ИИ, 1-3 предложения",
     "recommendations": ["рекомендация 1", "рекомендация 2"]
@@ -72,7 +73,9 @@ ${RISKS_CLOSE_TAG}
 Требования к рискам:
 - 3-10 элементов, отражающих суть документа.
 - level выбирается строго из списка: "Хорошо" / "Сомнительно" / "Большие риски".
-- quote — это точная подстрока документа, без многоточий и пропусков, иначе подсветка в тексте не сработает.
+- ОБЯЗАТЕЛЬНО: в name первым словом указывай номер пункта/раздела документа (например, "п. 2.3", "Раздел 4", "ст. 12"). Если документ не структурирован — укажи "Преамбула" или "Общее".
+- section — отдельное поле с тем же номером пункта/раздела (например, "п. 2.3").
+- quote — это точная подстрока документа, без многоточий и пропусков, копируй БУКВАЛЬНО, иначе подсветка в тексте не сработает.
 - recommendations — массив строк (не объектов).
 - Никакого текста вне маркеров после ${RISKS_OPEN_TAG}.
 {{EXTRA_INSTRUCTIONS}}
@@ -107,13 +110,14 @@ function normalizeRisk(raw) {
   const level = typeof raw.level === 'string' ? raw.level.trim() : ''
   if (!RISK_LEVEL_KEYS[level]) return null
   const name = String(raw.name ?? '').trim()
+  const section = String(raw.section ?? '').trim()
   const quote = String(raw.quote ?? '').trim()
   const comment = String(raw.comment ?? '').trim()
   const recommendations = Array.isArray(raw.recommendations)
     ? raw.recommendations.map((r) => String(r).trim()).filter(Boolean)
     : []
   if (!name && !quote) return null
-  return { level, name, quote, comment, recommendations }
+  return { level, name, section, quote, comment, recommendations, completed: false }
 }
 
 /**
