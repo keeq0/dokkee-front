@@ -102,71 +102,73 @@
     </div>
     <div class="analysis__content">
 
-      <div
-        class="content__document"
-        ref="documentContainer"
-        :style="{ '--preview-font-scale': fontScale }"
-        @mousedown="onContainerMouseDown"
-        @mousemove="onContainerMouseMove"
-        @mouseup="onContainerMouseUp"
-        @mouseleave="onContainerMouseUp">
-        <div v-if="!hasDocument" class="content__placeholder">
-          Загрузите документ(-ы) для начала работы
-        </div>
-        <div v-if="resizing" class="pdf-loading-overlay">
-          <div class="pdf-loading-dots">
-            <div class="pdf-loading-dot"></div>
-            <div class="pdf-loading-dot"></div>
-            <div class="pdf-loading-dot"></div>
-          </div>
-        </div>
-      </div>
-      <transition name="risk-popover-slide">
+      <div class="content__document-wrap">
         <div
-          v-if="activeRisk"
-          class="risk-popover"
-          :class="`risk-popover--${RISK_LEVEL_KEYS[activeRisk.level]}`"
-          @click.stop>
-          <header class="risk-popover__header">
-            <div class="risk-popover__head-meta">
-              <span class="risk-popover__level">{{ activeRisk.level }}</span>
-              <span v-if="activeRisk.section" class="risk-popover__section">{{ activeRisk.section }}</span>
-            </div>
-            <button type="button" class="risk-popover__close" @click="closeRiskPopover" aria-label="Закрыть">×</button>
-          </header>
-          <div class="risk-popover__body">
-            <h5 class="risk-popover__title">{{ activeRisk.name }}</h5>
-            <blockquote class="risk-popover__quote">{{ activeRisk.quote }}</blockquote>
-            <p class="risk-popover__comment">{{ activeRisk.comment }}</p>
-            <ul v-if="recommendationsExpanded && activeRisk.recommendations?.length" class="risk-popover__recommendations">
-              <li v-for="(rec, idx) in activeRisk.recommendations" :key="idx">{{ rec }}</li>
-            </ul>
+          class="content__document"
+          ref="documentContainer"
+          :style="{ '--preview-font-scale': fontScale }"
+          @mousedown="onContainerMouseDown"
+          @mousemove="onContainerMouseMove"
+          @mouseup="onContainerMouseUp"
+          @mouseleave="onContainerMouseUp">
+          <div v-if="!hasDocument" class="content__placeholder">
+            Загрузите документ(-ы) для начала работы
           </div>
-          <div class="risk-popover__actions">
-            <button
-              type="button"
-              class="risk-popover__btn"
-              :disabled="!activeRisk.recommendations?.length"
-              @click="recommendationsExpanded = !recommendationsExpanded">
-              {{ recommendationsExpanded ? 'Скрыть' : 'Рекомендации' }}
-              <span v-if="activeRisk.recommendations?.length"> ({{ activeRisk.recommendations.length }})</span>
-            </button>
-            <button
-              type="button"
-              class="risk-popover__btn risk-popover__btn--done"
-              :class="{ 'risk-popover__btn--done-active': activeRisk.completed }"
-              @click="toggleRiskCompleted">
-              {{ activeRisk.completed ? 'Снять статус' : 'Готово' }}
-            </button>
-            <button
-              type="button"
-              class="risk-popover__btn risk-popover__btn--primary"
-              @click="askAiAboutRisk">
-              Спросить у ИИ
-            </button>
+          <div v-if="resizing" class="pdf-loading-overlay">
+            <div class="pdf-loading-dots">
+              <div class="pdf-loading-dot"></div>
+              <div class="pdf-loading-dot"></div>
+              <div class="pdf-loading-dot"></div>
+            </div>
           </div>
         </div>
-      </transition>
+        <transition name="risk-popover-slide">
+          <div
+            v-if="activeRisk"
+            class="risk-popover"
+            :class="`risk-popover--${RISK_LEVEL_KEYS[activeRisk.level]}`"
+            @click.stop>
+            <header class="risk-popover__header">
+              <div class="risk-popover__head-meta">
+                <span class="risk-popover__level">{{ activeRisk.level }}</span>
+                <span v-if="activeRisk.section" class="risk-popover__section">{{ activeRisk.section }}</span>
+              </div>
+              <button type="button" class="risk-popover__close" @click="closeRiskPopover" aria-label="Закрыть">×</button>
+            </header>
+            <div class="risk-popover__body">
+              <h5 class="risk-popover__title">{{ activeRisk.name }}</h5>
+              <blockquote class="risk-popover__quote">{{ activeRisk.quote }}</blockquote>
+              <p class="risk-popover__comment">{{ activeRisk.comment }}</p>
+              <ul v-if="recommendationsExpanded && activeRisk.recommendations?.length" class="risk-popover__recommendations">
+                <li v-for="(rec, idx) in activeRisk.recommendations" :key="idx">{{ rec }}</li>
+              </ul>
+            </div>
+            <div class="risk-popover__actions">
+              <button
+                type="button"
+                class="risk-popover__btn"
+                :disabled="!activeRisk.recommendations?.length"
+                @click="recommendationsExpanded = !recommendationsExpanded">
+                {{ recommendationsExpanded ? 'Скрыть' : 'Рекомендации' }}
+                <span v-if="activeRisk.recommendations?.length"> ({{ activeRisk.recommendations.length }})</span>
+              </button>
+              <button
+                type="button"
+                class="risk-popover__btn risk-popover__btn--done"
+                :class="{ 'risk-popover__btn--done-active': activeRisk.completed }"
+                @click="toggleRiskCompleted">
+                {{ activeRisk.completed ? 'Снять статус' : 'Готово' }}
+              </button>
+              <button
+                type="button"
+                class="risk-popover__btn risk-popover__btn--primary"
+                @click="askAiAboutRisk">
+                Спросить у ИИ
+              </button>
+            </div>
+          </div>
+        </transition>
+      </div>
 
       <div class="content__panel" :class="{ 'expanded': expanded }">
         <ul class="panel__levels">
@@ -223,8 +225,7 @@
                   class="risk-panel__item"
                   :class="{ 'risk-panel__item--active': activeRiskKey === risks.indexOf(risk), 'risk-panel__item--completed': risk.completed }"
                   @click="selectRisk(risks.indexOf(risk))">
-                  <span class="risk-panel__item-name">{{ riskDisplayName(risk) }}</span>
-                  <span v-if="risk.completed" class="risk-panel__item-badge">Готово</span>
+                  {{ riskDisplayName(risk) }}
                 </li>
               </ul>
             </section>
@@ -703,13 +704,15 @@ export default {
       container.appendChild(wrapper);
       // docx-preview сохраняет inline-стили оригинального документа:
       // отступы, выравнивание, табы, списки, таблицы - близко к Word.
+      // ignoreWidth/Height: true чтобы не задавать жёсткую ширину/высоту
+      // страницы DOCX - позволит документу адаптироваться под viewport.
       await renderDocxAsync(doc.file, wrapper, null, {
         className: 'docx',
         inWrapper: false,
-        ignoreWidth: false,
-        ignoreHeight: false,
+        ignoreWidth: true,
+        ignoreHeight: true,
         ignoreFonts: false,
-        breakPages: true,
+        breakPages: false,
         ignoreLastRenderedPageBreak: true,
         experimental: false,
         trimXmlDeclaration: true,
@@ -722,6 +725,52 @@ export default {
       }
       this.documentsStore.setHtmlPreview(doc.id, wrapper.innerHTML);
       this.totalPages = 1;
+      // Сохраняем оригинальные font-size/padding inline-стилей, чтобы потом
+      // масштабировать их через DOM-walk (CSS zoom поддерживается не везде).
+      this.snapshotDocxOriginalStyles(wrapper);
+      this.applyDocxFontScale();
+    },
+    snapshotDocxOriginalStyles(rootEl) {
+      const root = rootEl || this.$refs.documentContainer?.querySelector?.('.docx-preview');
+      if (!root) return;
+      // Только то, что docx-preview задал inline через style="font-size: ...".
+      const all = root.querySelectorAll('[style]');
+      all.forEach((el) => {
+        if (!el.dataset) return;
+        if (!el.dataset.dpFsOriginal) {
+          const fs = el.style.fontSize;
+          if (fs) el.dataset.dpFsOriginal = fs;
+        }
+        if (!el.dataset.dpLhOriginal) {
+          const lh = el.style.lineHeight;
+          if (lh) el.dataset.dpLhOriginal = lh;
+        }
+      });
+    },
+    applyDocxFontScale() {
+      const root = this.$refs.documentContainer?.querySelector?.('.docx-preview');
+      if (!root) return;
+      const scale = this.fontScale || 1;
+      const all = root.querySelectorAll('[data-dp-fs-original], [data-dp-lh-original]');
+      all.forEach((el) => {
+        const fs = el.dataset?.dpFsOriginal;
+        const lh = el.dataset?.dpLhOriginal;
+        if (fs) {
+          // fs может быть "11pt", "16px" - умножаем число на scale.
+          const m = String(fs).match(/^(-?\d*\.?\d+)([a-zA-Z%]*)$/);
+          if (m) {
+            const value = parseFloat(m[1]) * scale;
+            el.style.fontSize = `${value}${m[2]}`;
+          }
+        }
+        if (lh) {
+          // line-height унитless просто умножается; с единицами тоже.
+          const m = String(lh).match(/^(-?\d*\.?\d+)([a-zA-Z%]*)$/);
+          if (m && m[2]) {
+            el.style.lineHeight = `${parseFloat(m[1]) * scale}${m[2]}`;
+          }
+        }
+      });
     },
 
     async renderPDF(doc) {
@@ -768,13 +817,19 @@ export default {
 
           const textLayerDiv = document.createElement('div');
           textLayerDiv.className = 'pdf-text-layer';
-          textLayerDiv.style.width = `${viewport.width}px`;
-          textLayerDiv.style.height = `${viewport.height}px`;
-          // pdf.js v5 строит left/top/font-size в inline-стилях каждого span'а
-          // через calc(var(--total-scale-factor) * Xpx). Без этой переменной
-          // на контейнере получается 0px - текст невидим и не выделяется.
+          // pdf.js v5 строит left/top/font-size span'ов и width/height layer'а
+          // через CSS-функции calc(var(--total-scale-factor) * Xpx) и
+          // round(down, ..., var(--scale-round-x)). Если этих переменных нет
+          // на контейнере - округление падает в auto, ширина layer'а
+          // становится 0, и все span'ы с left:X% оказываются на 0. Текст
+          // невидим и не выделяется.
           textLayerDiv.style.setProperty('--total-scale-factor', String(viewport.scale));
           textLayerDiv.style.setProperty('--scale-factor', String(viewport.scale));
+          textLayerDiv.style.setProperty('--scale-round-x', '1px');
+          textLayerDiv.style.setProperty('--scale-round-y', '1px');
+          // Резервная ширина/высота на случай если pdf.js не перепишет.
+          textLayerDiv.style.width = `${viewport.width}px`;
+          textLayerDiv.style.height = `${viewport.height}px`;
           pageContainer.appendChild(textLayerDiv);
 
           try {
@@ -841,7 +896,13 @@ export default {
   },
   watch: {
     fontScalePercent() {
-      if (this.selectedDocument?.type !== 'pdf') return;
+      const type = this.selectedDocument?.type;
+      if (type === 'docx') {
+        // DOCX масштабируется мгновенно через DOM-walk - не требует re-render.
+        this.applyDocxFontScale();
+        return;
+      }
+      if (type !== 'pdf') return;
       if (this.fontScaleRerenderTimer) clearTimeout(this.fontScaleRerenderTimer);
       this.fontScaleRerenderTimer = setTimeout(() => {
         this.updatePdfSize();
@@ -947,6 +1008,15 @@ export default {
   height: 500px;
   overflow: hidden;
 }
+.content__document-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #fff;
+}
 .content__document {
   width: 100%;
   height: 100%;
@@ -977,6 +1047,9 @@ export default {
   width: 100%;
   flex: 1;
 }
+.expanded .content__document-wrap {
+  flex: 1;
+}
 
 .pdf-page-container {
   margin-bottom: 10px;
@@ -991,11 +1064,32 @@ export default {
 .docx-preview {
   color: #222;
   user-select: text;
-  /* CSS zoom масштабирует весь контейнер вместе с inline-стилями docx-preview,
-     включая шрифты, отступы и таблицы. zoom поддерживается в Chrome/Safari/Edge
-     и в Firefox начиная с 126. */
-  zoom: var(--preview-font-scale, 1);
   background: #fff;
+  padding: 16px 24px;
+  /* Шрифт DOCX масштабируется DOM-walk'ом через applyDocxFontScale -
+     надёжнее CSS zoom (не поддержан в части Firefox). */
+}
+
+/* Внутренний контейнер docx-preview (.docx). Убираем фиксированную ширину
+   страницы Word и большие margin'ы, чтобы документ адаптировался под
+   доступную ширину viewport'а. */
+.docx-preview :deep(.docx) {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+.docx-preview :deep(section.docx) {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  padding: 0 !important;
+  margin: 0 0 16px 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
 }
 .content__panel {
   width: 200px;
@@ -1445,8 +1539,8 @@ export default {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  min-width: 280px;
-  max-width: 360px;
+  min-width: 200px;
+  max-width: 260px;
   background: #fff;
   border: 1px solid #e6e6e6;
   border-radius: 12px;
@@ -1635,26 +1729,7 @@ export default {
   color: #333;
   background: rgba(255, 255, 255, 0.6);
   border: 1px solid transparent;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-
-.risk-panel__item-name {
-  flex: 1;
-  min-width: 0;
-}
-
-.risk-panel__item-badge {
-  font-size: 10px;
-  background: #1f7a1f;
-  color: #fff;
-  border-radius: 4px;
-  padding: 1px 6px;
-  font-weight: 600;
-  white-space: nowrap;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .risk-panel__item:hover {
@@ -1670,15 +1745,16 @@ export default {
 }
 
 .risk-panel__item--completed {
-  background: rgba(0, 128, 0, 0.12);
-  border-color: rgba(0, 128, 0, 0.35);
-  color: #1f7a1f;
+  background: #1f7a1f;
+  color: #fff;
+  border-color: #1f7a1f;
 }
+.risk-panel__item--completed:hover { background: #186218; }
 
 .risk-panel__item--completed.risk-panel__item--active {
-  background: #fff;
-  color: #1f7a1f;
-  border-color: #1f7a1f;
+  background: #1f7a1f;
+  color: #fff;
+  border-color: #14541a;
 }
 
 
@@ -1870,14 +1946,14 @@ export default {
 }
 
 .risk-highlight {
-  border-radius: 3px;
-  padding: 0 2px;
+  border-radius: 8px;
+  padding: 0 5px;
   cursor: pointer;
-  transition: filter 0.15s ease;
+  transition: filter 0.15s ease, background-color 0.15s ease;
 }
 
 .risk-highlight:hover {
-  filter: brightness(0.95);
+  filter: brightness(0.7);
 }
 
 .risk-highlight--overlay {

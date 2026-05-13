@@ -102,14 +102,15 @@ export default {
       if (this.analysisDoneSeen.has(docId)) return;
       this.analysisDoneSeen.add(docId);
 
-      // Авто-открытие только при первом завершённом документе текущей сессии
-      // И только если ассистент сейчас НЕ открыт. Повторных автооткрытий нет.
-      if (!this.firstAnalysisAutoOpened && !this.showAssistant) {
-        this.firstAnalysisAutoOpened = true;
-        this.activateAssistant();
-      }
-      // Если ассистент уже открыт - просто обновляем содержимое (происходит
-      // реактивно через computed analysisResult без принудительных действий).
+      // Авто-переоткрытие: только ОДИН раз за сессию И только при ПЕРВОМ
+      // завершённом документе И только если активен ИМЕННО ЭТОТ документ
+      // в просмотрщике И ассистент сейчас скрыт (пользователь его закрыл).
+      if (this.firstAnalysisAutoOpened) return;
+      this.firstAnalysisAutoOpened = true;
+      const activeDocId = this.documentsStore.selectedId;
+      if (activeDocId !== docId) return;
+      if (this.showAssistant) return;
+      this.activateAssistant();
     },
 
     activateAssistant() {
@@ -129,6 +130,8 @@ export default {
       // Новая сессия анализа - сбрасываем флаги автооткрытия.
       this.firstAnalysisAutoOpened = false;
       this.analysisDoneSeen = new Set();
+      // Сразу открываем ассистента с активным документом (требование #19 п. 1.1).
+      this.activateAssistant();
       this.$nextTick(() => {
         if (this.$refs.analysisResult?.startAnalysisForAll) {
           this.$refs.analysisResult.startAnalysisForAll(options);
@@ -159,12 +162,12 @@ export default {
 
 .upload-documents-container {
   width: 450px;
+  flex-shrink: 0;
   transition: width 0.3s ease;
 }
 
 .upload-documents-container.collapsed {
   width: 70px;
-  
 }
 
 /* Анимация для плавного скрытия */
@@ -184,20 +187,20 @@ export default {
 }
 .main-page__content {
   display: flex;
-  position: relative;
-  height: 600px
+  gap: 20px;
+  height: 600px;
+  width: 100%;
 }
 
 .analysis-container {
-  position: absolute;
-  left: 470px; /* 450px + 20px gap */
-  width: 620px;
+  flex: 1;
+  min-width: 0;
   transition: all 0.3s ease;
 }
 
 .analysis-container.expanded {
-  left: 75px; /* 55px + 20px gap */
-  width: calc(100% - 95px); /* 55px + 20px*2 gap */
+  flex: 1;
+  width: 100%;
   max-width: none;
 }
 

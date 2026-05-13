@@ -126,6 +126,15 @@
         </div>
       </div>
 
+      <!-- Кнопка остановки стрима -->
+      <button
+        v-if="isStreaming"
+        type="button"
+        class="chat-stop-button"
+        @click="stopStreaming">
+        Остановить
+      </button>
+
       <div
         v-if="showScrollToBottom"
         class="scroll-to-bottom"
@@ -242,7 +251,9 @@ export default {
       pendingPinnedRisk: null,
       // Авто-скролл к низу включён пока пользователь сам не отскроллил вверх.
       // Когда возвращается в самый низ - снова true.
-      autoScrollEnabled: true
+      autoScrollEnabled: true,
+      // Активный стрим - флаг для UI (кнопка "Остановить").
+      isStreaming: false
     };
   },
   computed: {
@@ -672,6 +683,7 @@ export default {
       this.documentsStore.addChatMessage(docId, { role: 'assistant', content: '' });
       this.$nextTick(() => this.scrollToBottom());
 
+      this.isStreaming = true;
       const streamer = createTextStreamer({
         content: fullText,
         chunkSize: 4,
@@ -687,11 +699,21 @@ export default {
         onDone: () => {
           this.activeStreamer = null;
           this.isWaitingForAnswer = false;
+          this.isStreaming = false;
           this.$nextTick(() => this.scrollToBottom());
         }
       });
       this.activeStreamer = streamer;
       streamer.start();
+    },
+    stopStreaming() {
+      // Принудительно завершает стриминг: вставляет полный текст и убирает
+      // флаги. Помощник остаётся открытым.
+      if (!this.activeStreamer) return;
+      this.activeStreamer.stop({ flush: true });
+      this.activeStreamer = null;
+      this.isStreaming = false;
+      this.isWaitingForAnswer = false;
     },
     clearPinnedRisk() {
       const docId = this.selectedDocId;
@@ -907,9 +929,20 @@ ${pinnedRisk.section ? `- Раздел/пункт: ${pinnedRisk.section}\n` : ''
 }
 .chat-message--user { grid-template-columns: 1fr 32px; }
 .chat-message--user .chat-message__avatar { grid-column: 2; grid-row: 1; }
-.chat-message--user .chat-message__content { grid-column: 1; grid-row: 1; justify-self: end; }
+.chat-message--user .chat-message__content { grid-column: 1; grid-row: 1; justify-self: end; max-width: 75%; }
 .chat-message--user .chat-pinned-risk { grid-column: 1; grid-row: 2; justify-self: end; max-width: 75%; }
-.chat-message--ai .chat-message__content { grid-column: 2; grid-row: 1; }
+.chat-message--ai .chat-message__content { grid-column: 2; grid-row: 1; width: 100%; max-width: 100%; }
+.chat-message--loading .chat-message__content {
+  grid-column: 2; grid-row: 1;
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  min-height: 48px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 .chat-message__avatar {
   flex-shrink: 0;
   width: 32px;
@@ -922,7 +955,6 @@ ${pinnedRisk.section ? `- Раздел/пункт: ${pinnedRisk.section}\n` : ''
 }
 .chat-message__avatar img { width: 20px; height: 20px; }
 .chat-message__content {
-  max-width: 75%;
   padding: 10px 14px;
   border-radius: 18px;
   word-wrap: break-word;
@@ -936,6 +968,21 @@ ${pinnedRisk.section ? `- Раздел/пункт: ${pinnedRisk.section}\n` : ''
 .chat-message--loading .chat-message__content { background: #3a3a3a; }
 .typing-indicator { font-size: 20px; letter-spacing: 2px; animation: blink 1.2s infinite; }
 @keyframes blink { 0% { opacity: 0.2; } 50% { opacity: 1; } 100% { opacity: 0.2; } }
+
+.chat-stop-button {
+  margin: 8px auto;
+  display: block;
+  padding: 6px 14px;
+  background: rgba(208, 64, 64, 0.9);
+  color: #fff;
+  border: none;
+  border-radius: 16px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition: background 0.15s ease;
+}
+.chat-stop-button:hover { background: rgba(180, 40, 40, 1); }
 
 .chat-input-area {
   display: grid;
@@ -965,18 +1012,25 @@ ${pinnedRisk.section ? `- Раздел/пункт: ${pinnedRisk.section}\n` : ''
 .chat-pinned-risk--warn { border-color: rgba(217, 156, 0, 0.6); }
 .chat-pinned-risk--danger { border-color: rgba(208, 64, 64, 0.6); }
 
+/* Inline pinned-risk (под сообщением пользователя в чате) выглядит так же,
+   как блок над полем ввода: полноцветный фон по уровню риска, белый текст. */
 .chat-pinned-risk--inline {
-  margin-bottom: 8px;
-  background: rgba(0, 0, 0, 0.04);
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  color: #333;
+  margin-top: 0;
+  width: auto;
+  border-width: 2px;
 }
-.chat-pinned-risk--inline .chat-pinned-risk__title { color: #222; }
-.chat-pinned-risk--inline .chat-pinned-risk__quote { color: #555; border-left-color: rgba(0, 0, 0, 0.2); }
-.chat-pinned-risk--inline .chat-pinned-risk__badge { color: #666; }
-.chat-pinned-risk--inline.chat-pinned-risk--good { border-color: rgba(31, 122, 31, 0.4); background: rgba(31, 122, 31, 0.08); }
-.chat-pinned-risk--inline.chat-pinned-risk--warn { border-color: rgba(181, 132, 0, 0.4); background: rgba(255, 200, 0, 0.1); }
-.chat-pinned-risk--inline.chat-pinned-risk--danger { border-color: rgba(196, 48, 48, 0.4); background: rgba(196, 48, 48, 0.08); }
+.chat-pinned-risk--inline.chat-pinned-risk--good {
+  background: rgba(31, 122, 31, 0.85);
+  border-color: rgba(31, 122, 31, 1);
+}
+.chat-pinned-risk--inline.chat-pinned-risk--warn {
+  background: rgba(217, 156, 0, 0.9);
+  border-color: rgba(217, 156, 0, 1);
+}
+.chat-pinned-risk--inline.chat-pinned-risk--danger {
+  background: rgba(208, 64, 64, 0.92);
+  border-color: rgba(208, 64, 64, 1);
+}
 
 .chat-pinned-risk__head {
   display: flex;
