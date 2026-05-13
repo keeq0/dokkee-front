@@ -112,6 +112,8 @@ test.describe('AnalysisResult: новые фичи', () => {
     await page.locator('.prompt-modal__btn--primary').click()
 
     await expect(page.locator('.progress__status')).toHaveText('Анализ завершён', { timeout: 90000 })
+    await page.locator('.assistant__close').click()
+    await expect(page.locator('.assistant.assistant--visible')).toHaveCount(0)
 
     const downloadButton = page.locator('.panel__button.save').nth(1)
     const downloadPromise = page.waitForEvent('download', { timeout: 30000 })

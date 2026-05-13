@@ -17,6 +17,7 @@ services:
       - CHOKIDAR_USEPOLLING=true
       - HOST=0.0.0.0
       - PORT=8080
+      - VUE_APP_DEEPSEEK_KEY=${VUE_APP_DEEPSEEK_KEY:-e2e-mock-key}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080"]
       interval: 5s
