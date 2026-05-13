@@ -126,46 +126,61 @@
           <div
             v-if="activeRisk"
             class="risk-popover"
-            :class="`risk-popover--${RISK_LEVEL_KEYS[activeRisk.level]}`"
+            :class="[
+              `risk-popover--${RISK_LEVEL_KEYS[activeRisk.level]}`,
+              { 'risk-popover--expanded': popoverExpanded }
+            ]"
             @click.stop>
-            <header class="risk-popover__header">
-              <div class="risk-popover__head-meta">
-                <span class="risk-popover__level">{{ activeRisk.level }}</span>
-                <span v-if="activeRisk.section" class="risk-popover__section">{{ activeRisk.section }}</span>
+            <div class="risk-popover__main">
+              <div class="risk-popover__top">
+                <span class="risk-popover__level-pill">{{ activeRisk.level }}</span>
+                <h5 class="risk-popover__title">{{ activeRisk.name }}</h5>
+                <button
+                  type="button"
+                  class="risk-popover__accept"
+                  :class="{ 'risk-popover__accept--active': activeRisk.completed }"
+                  @click="toggleRiskCompleted">
+                  <span>{{ activeRisk.completed ? 'Снять' : 'Принять риск' }}</span>
+                  <span class="risk-popover__accept-arrow">›</span>
+                </button>
               </div>
-              <button type="button" class="risk-popover__close" @click="closeRiskPopover" aria-label="Закрыть">×</button>
-            </header>
-            <div class="risk-popover__body">
-              <h5 class="risk-popover__title">{{ activeRisk.name }}</h5>
-              <blockquote class="risk-popover__quote">{{ activeRisk.quote }}</blockquote>
+              <div class="risk-popover__quote-row">
+                <span class="risk-popover__quote-bar" aria-hidden="true"></span>
+                <blockquote class="risk-popover__quote">{{ activeRisk.section ? `${activeRisk.section}: ` : '' }}{{ activeRisk.quote }}</blockquote>
+              </div>
               <p class="risk-popover__comment">{{ activeRisk.comment }}</p>
+              <div class="risk-popover__bottom-row">
+                <button
+                  type="button"
+                  class="risk-popover__recom-btn"
+                  :class="{ 'risk-popover__recom-btn--active': recommendationsExpanded }"
+                  :disabled="!activeRisk.recommendations?.length"
+                  @click="recommendationsExpanded = !recommendationsExpanded">
+                  РЕКОМЕНДАЦИИ
+                </button>
+                <button
+                  type="button"
+                  class="risk-popover__ask"
+                  @click="askAiAboutRisk">
+                  Спросить у ИИ ›
+                </button>
+              </div>
               <ul v-if="recommendationsExpanded && activeRisk.recommendations?.length" class="risk-popover__recommendations">
                 <li v-for="(rec, idx) in activeRisk.recommendations" :key="idx">{{ rec }}</li>
               </ul>
             </div>
-            <div class="risk-popover__actions">
-              <button
-                type="button"
-                class="risk-popover__btn"
-                :disabled="!activeRisk.recommendations?.length"
-                @click="recommendationsExpanded = !recommendationsExpanded">
-                {{ recommendationsExpanded ? 'Скрыть' : 'Рекомендации' }}
-                <span v-if="activeRisk.recommendations?.length"> ({{ activeRisk.recommendations.length }})</span>
-              </button>
-              <button
-                type="button"
-                class="risk-popover__btn risk-popover__btn--done"
-                :class="{ 'risk-popover__btn--done-active': activeRisk.completed }"
-                @click="toggleRiskCompleted">
-                {{ activeRisk.completed ? 'Снять статус' : 'Готово' }}
-              </button>
-              <button
-                type="button"
-                class="risk-popover__btn risk-popover__btn--primary"
-                @click="askAiAboutRisk">
-                Спросить у ИИ
-              </button>
-            </div>
+            <button
+              type="button"
+              class="risk-popover__expand"
+              :aria-label="popoverExpanded ? 'Свернуть' : 'Раскрыть'"
+              @click="popoverExpanded = !popoverExpanded">
+              <span class="risk-popover__expand-label">{{ popoverExpanded ? 'Свернуть' : 'Раскрыть' }}</span>
+            </button>
+            <button
+              type="button"
+              class="risk-popover__close"
+              @click="closeRiskPopover"
+              aria-label="Закрыть">×</button>
           </div>
         </transition>
       </div>
@@ -284,6 +299,7 @@ export default {
       onDocumentClick: null,
       activeRiskKey: null,
       recommendationsExpanded: false,
+      popoverExpanded: false,
       isExporting: false,
       fontScaleRerenderTimer: null,
       panState: {
@@ -426,6 +442,7 @@ export default {
     closeRiskPopover() {
       this.activeRiskKey = null;
       this.recommendationsExpanded = false;
+      this.popoverExpanded = false;
     },
     scrollToActiveRiskMark(index) {
       const docContainer = this.$refs.documentContainer;
@@ -456,7 +473,7 @@ export default {
       // НЕ по интерактивному элементу (риск-маркер, текст для выделения и т.п.).
       if (this.fontScale <= 1) return;
       if (event.button !== 0) return;
-      if (event.target.closest('.risk-highlight, .risk-popover, .pdf-text-layer span, .pdf-text-layer mark')) return;
+      if (event.target.closest('.risk-highlight, .risk-popover, mark.risk-highlight')) return;
       const container = this.$refs.documentContainer;
       if (!container) return;
       this.panState.active = true;
@@ -485,13 +502,12 @@ export default {
     getHighlightRoots() {
       const container = this.$refs.documentContainer;
       if (!container) return [];
-      const roots = Array.from(container.querySelectorAll('.docx-preview, .pdf-text-layer'));
+      const roots = Array.from(container.querySelectorAll('.docx-preview'));
       return roots;
     },
-    getHighlightConfigForRoot(root) {
-      if (root.classList.contains('pdf-text-layer')) {
-        return { mode: 'overlay', baseClass: 'risk-highlight risk-highlight--overlay' };
-      }
+    getHighlightConfigForRoot() {
+      // Теперь и PDF и DOCX рендерятся как HTML через .docx-preview -
+      // используем wrap-режим (вкладываем <mark> в текст).
       return { mode: 'wrap', baseClass: 'risk-highlight' };
     },
     applyRiskHighlights() {
@@ -561,7 +577,7 @@ export default {
       const container = this.$refs.documentContainer;
       if (!container) return;
 
-      container.querySelectorAll('.pdf-page-container, .docx-preview').forEach((el) => el.remove());
+      container.querySelectorAll('.docx-preview, .pdf-page-container').forEach((el) => el.remove());
 
       if (doc.type === 'pdf') {
         await this.renderPDF(doc);
@@ -731,123 +747,89 @@ export default {
       this.applyDocxFontScale();
     },
     snapshotDocxOriginalStyles(rootEl) {
+      // Идём по ВСЕМ потомкам и через getComputedStyle получаем актуальный
+      // font-size в px - неважно, задан он inline, через docx-preview class
+      // (.docx p { font-size: 11pt }) или наследован от родителя.
+      // Сохраняем числовое значение в data-dp-fs-px, чтобы потом умножать на scale.
       const root = rootEl || this.$refs.documentContainer?.querySelector?.('.docx-preview');
       if (!root) return;
-      // Только то, что docx-preview задал inline через style="font-size: ...".
-      const all = root.querySelectorAll('[style]');
+      const all = root.querySelectorAll('*');
       all.forEach((el) => {
-        if (!el.dataset) return;
-        if (!el.dataset.dpFsOriginal) {
-          const fs = el.style.fontSize;
-          if (fs) el.dataset.dpFsOriginal = fs;
-        }
-        if (!el.dataset.dpLhOriginal) {
-          const lh = el.style.lineHeight;
-          if (lh) el.dataset.dpLhOriginal = lh;
-        }
+        if (!el.dataset || el.dataset.dpFsPx) return;
+        const fs = parseFloat(window.getComputedStyle(el).fontSize);
+        if (fs > 0) el.dataset.dpFsPx = String(fs);
       });
     },
     applyDocxFontScale() {
       const root = this.$refs.documentContainer?.querySelector?.('.docx-preview');
       if (!root) return;
       const scale = this.fontScale || 1;
-      const all = root.querySelectorAll('[data-dp-fs-original], [data-dp-lh-original]');
+      const all = root.querySelectorAll('[data-dp-fs-px]');
       all.forEach((el) => {
-        const fs = el.dataset?.dpFsOriginal;
-        const lh = el.dataset?.dpLhOriginal;
-        if (fs) {
-          // fs может быть "11pt", "16px" - умножаем число на scale.
-          const m = String(fs).match(/^(-?\d*\.?\d+)([a-zA-Z%]*)$/);
-          if (m) {
-            const value = parseFloat(m[1]) * scale;
-            el.style.fontSize = `${value}${m[2]}`;
-          }
-        }
-        if (lh) {
-          // line-height унитless просто умножается; с единицами тоже.
-          const m = String(lh).match(/^(-?\d*\.?\d+)([a-zA-Z%]*)$/);
-          if (m && m[2]) {
-            el.style.lineHeight = `${parseFloat(m[1]) * scale}${m[2]}`;
-          }
-        }
+        const orig = parseFloat(el.dataset.dpFsPx);
+        if (!Number.isFinite(orig)) return;
+        el.style.fontSize = `${orig * scale}px`;
       });
     },
 
     async renderPDF(doc) {
+      // PDF рендерится как HTML-текст (как DOCX) - без canvas. Это даёт
+      // единое поведение с docx-preview: одинаковая ширина, font-scale,
+      // выделение текста и color-маркеры рисков через wrap-режим.
       const lib = await this.ensurePdfJs();
       if (!doc?.url || !lib) return;
-
       const container = this.$refs.documentContainer;
       if (!container) return;
-
       container.classList.add('pdf-loading');
-
       try {
         const loadingTask = lib.getDocument({ url: doc.url, verbosity: 0 });
         const pdf = await loadingTask.promise;
         this.totalPages = pdf.numPages;
-
-        const containerWidth = container.clientWidth * 1;
-        const fontScale = this.fontScale || 1;
-
+        const wrapper = document.createElement('div');
+        wrapper.className = 'docx-preview pdf-as-docx';
+        container.appendChild(wrapper);
         for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
           const page = await pdf.getPage(pageNumber);
-          const unscaledViewport = page.getViewport({ scale: 1.0 });
-          const scale = (containerWidth / unscaledViewport.width) * fontScale;
-          const viewport = page.getViewport({ scale });
-
-          const pageContainer = document.createElement('div');
-          pageContainer.classList.add('pdf-page-container');
-          pageContainer.style.position = 'relative';
-          pageContainer.style.width = `${viewport.width}px`;
-          pageContainer.style.height = `${viewport.height}px`;
-
-          const canvas = document.createElement('canvas');
-          canvas.width = viewport.width;
-          canvas.height = viewport.height;
-          canvas.classList.add('pdf-page');
-          canvas.style.animation = 'fadeInEffect 0.5s ease';
-
-          const renderContext = {
-            canvasContext: canvas.getContext('2d'),
-            viewport
-          };
-          await page.render(renderContext).promise;
-          pageContainer.appendChild(canvas);
-
-          const textLayerDiv = document.createElement('div');
-          textLayerDiv.className = 'pdf-text-layer';
-          // pdf.js v5 строит left/top/font-size span'ов и width/height layer'а
-          // через CSS-функции calc(var(--total-scale-factor) * Xpx) и
-          // round(down, ..., var(--scale-round-x)). Если этих переменных нет
-          // на контейнере - округление падает в auto, ширина layer'а
-          // становится 0, и все span'ы с left:X% оказываются на 0. Текст
-          // невидим и не выделяется.
-          textLayerDiv.style.setProperty('--total-scale-factor', String(viewport.scale));
-          textLayerDiv.style.setProperty('--scale-factor', String(viewport.scale));
-          textLayerDiv.style.setProperty('--scale-round-x', '1px');
-          textLayerDiv.style.setProperty('--scale-round-y', '1px');
-          // Резервная ширина/высота на случай если pdf.js не перепишет.
-          textLayerDiv.style.width = `${viewport.width}px`;
-          textLayerDiv.style.height = `${viewport.height}px`;
-          pageContainer.appendChild(textLayerDiv);
-
-          try {
-            const textContent = await page.getTextContent();
-            if (lib.TextLayer) {
-              const textLayer = new lib.TextLayer({
-                textContentSource: textContent,
-                container: textLayerDiv,
-                viewport
-              });
-              await textLayer.render();
+          const textContent = await page.getTextContent();
+          const pageEl = document.createElement('section');
+          pageEl.className = 'docx pdf-page-html';
+          // Группируем items по hasEOL в строки. Пустые строки - разделители
+          // абзацев (отрисовываем доп. margin).
+          let currentLine = [];
+          let lastWasEmpty = false;
+          const flush = () => {
+            const text = currentLine.join('').trim();
+            currentLine = [];
+            if (!text) {
+              if (!lastWasEmpty && pageEl.lastElementChild) {
+                pageEl.lastElementChild.classList.add('pdf-line--break');
+              }
+              lastWasEmpty = true;
+              return;
             }
-          } catch (error) {
-            console.warn('PDF text-layer render failed:', error?.message || error);
+            const p = document.createElement('p');
+            p.textContent = text;
+            pageEl.appendChild(p);
+            lastWasEmpty = false;
+          };
+          for (const item of textContent.items) {
+            if (item.str) currentLine.push(item.str);
+            if (item.hasEOL) flush();
           }
-
-          container.appendChild(pageContainer);
+          flush();
+          if (pdf.numPages > 1 && pageNumber < pdf.numPages) {
+            const hr = document.createElement('hr');
+            hr.className = 'pdf-page-break';
+            pageEl.appendChild(hr);
+          }
+          wrapper.appendChild(pageEl);
         }
+        const text = (wrapper.innerText || '').replace(/\s+/g, ' ').trim();
+        if (text && !doc.extractedText) {
+          this.documentsStore.setExtractedText(doc.id, text);
+        }
+        this.snapshotDocxOriginalStyles(wrapper);
+        this.applyDocxFontScale();
       } finally {
         container.classList.remove('pdf-loading');
       }
@@ -873,41 +855,20 @@ export default {
       }
     },
 
-    async updatePdfSize() {
-      if (!this.selectedDocument || this.selectedDocument.type !== 'pdf') return;
-      this.resizing = true;
-      try {
-        await this.$nextTick();
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        const container = this.$refs.documentContainer;
-        if (container) {
-          container.querySelectorAll('.pdf-page-container').forEach((el) => el.remove());
-        }
-        await this.renderPDF(this.selectedDocument);
-        if (this.risks.length > 0) {
-          this.applyRiskHighlights();
-        }
-      } catch (error) {
-        console.error('Error updating PDF size:', error);
-      } finally {
-        this.resizing = false;
-      }
+    // Сохранено для совместимости (MainPage вызывает при toggle меню).
+    // С HTML-рендером PDF контент реагирует на изменение ширины через CSS,
+    // re-render не нужен.
+    updatePdfSize() {
+      return;
     }
   },
   watch: {
     fontScalePercent() {
       const type = this.selectedDocument?.type;
-      if (type === 'docx') {
-        // DOCX масштабируется мгновенно через DOM-walk - не требует re-render.
+      // И PDF (как HTML) и DOCX масштабируются через DOM-walk - без re-render.
+      if (type === 'docx' || type === 'pdf') {
         this.applyDocxFontScale();
-        return;
       }
-      if (type !== 'pdf') return;
-      if (this.fontScaleRerenderTimer) clearTimeout(this.fontScaleRerenderTimer);
-      this.fontScaleRerenderTimer = setTimeout(() => {
-        this.updatePdfSize();
-        this.fontScaleRerenderTimer = null;
-      }, 400);
     },
     'selectedDocument.id': {
       immediate: true,
@@ -924,7 +885,7 @@ export default {
           // Документов не осталось - очищаем просмотрщик.
           const container = this.$refs.documentContainer;
           if (container) {
-            container.querySelectorAll('.pdf-page-container, .docx-preview').forEach((el) => el.remove());
+            container.querySelectorAll('.docx-preview, .pdf-page-container').forEach((el) => el.remove());
           }
           return;
         }
@@ -1051,23 +1012,39 @@ export default {
   flex: 1;
 }
 
-.pdf-page-container {
-  margin-bottom: 10px;
-}
-
-.pdf-page {
-  width: 100%;
-  max-width: 100%;
-  transition: all 0.3s ease;
-}
-
 .docx-preview {
   color: #222;
   user-select: text;
   background: #fff;
   padding: 16px 24px;
-  /* Шрифт DOCX масштабируется DOM-walk'ом через applyDocxFontScale -
+  box-sizing: border-box;
+  width: 100%;
+  /* Шрифт масштабируется DOM-walk'ом через applyDocxFontScale -
      надёжнее CSS zoom (не поддержан в части Firefox). */
+}
+.docx-preview.pdf-as-docx {
+  font-family: 'PT Sans', Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.docx-preview.pdf-as-docx :deep(.pdf-page-html) {
+  padding: 0;
+  margin: 0 0 18px 0;
+  background: transparent;
+  box-shadow: none;
+}
+.docx-preview.pdf-as-docx :deep(.pdf-page-html p) {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.docx-preview.pdf-as-docx :deep(.pdf-line--break) {
+  margin-bottom: 0.8em;
+}
+.docx-preview.pdf-as-docx :deep(.pdf-page-break) {
+  border: none;
+  border-top: 1px dashed #d9d9d9;
+  margin: 16px 0;
 }
 
 /* Внутренний контейнер docx-preview (.docx). Убираем фиксированную ширину
@@ -1758,21 +1735,29 @@ export default {
 }
 
 
+/* Карточка риска - дизайн из issue #19. */
 .risk-popover {
   position: absolute;
   z-index: 40;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  max-height: 60%;
-  background: #fff;
-  border: 1px solid #e6e6e6;
-  border-radius: 12px 12px 0 0;
-  box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.12);
-  overflow: hidden;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  max-width: 477px;
+  margin-left: auto;
+  margin-right: auto;
+  min-height: 134px;
+  background: #FFFFFF;
+  border: 1px solid #E6E6E6;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border-radius: 28px;
   cursor: default;
   display: flex;
-  flex-direction: column;
+  font-family: 'Montserrat', 'PT Sans', sans-serif;
+  overflow: hidden;
+}
+
+.risk-popover--expanded {
+  max-height: 80%;
 }
 
 .risk-popover-slide-enter-active,
@@ -1781,169 +1766,216 @@ export default {
 }
 .risk-popover-slide-enter-from,
 .risk-popover-slide-leave-to {
-  transform: translateY(100%);
+  transform: translateY(20px);
   opacity: 0;
 }
 
-.risk-popover__header {
+.risk-popover__main {
+  flex: 1;
+  min-width: 0;
+  padding: 11px 16px 11px 21px;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 14px;
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-  flex-shrink: 0;
-}
-
-.risk-popover__head-meta {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-
-.risk-popover__section {
-  background: rgba(255, 255, 255, 0.2);
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 500;
-}
-
-.risk-popover--good .risk-popover__header { background: #1f9d4a; }
-.risk-popover--warn .risk-popover__header { background: #d99c00; }
-.risk-popover--danger .risk-popover__header { background: #d04040; }
-
-.risk-popover__close {
-  background: transparent;
-  border: none;
-  color: #fff;
-  font-size: 20px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 6px;
-  opacity: 0.85;
-}
-.risk-popover__close:hover { opacity: 1; }
-
-.risk-popover__body {
-  padding: 10px 16px 4px;
+  flex-direction: column;
+  gap: 6px;
   overflow-y: auto;
-  flex: 1 1 auto;
-  min-height: 0;
 }
+
+.risk-popover__top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.risk-popover__level-pill {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  height: 15px;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-size: 8px;
+  font-weight: 600;
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.risk-popover--good .risk-popover__level-pill { background: rgba(0, 128, 0, 0.85); }
+.risk-popover--warn .risk-popover__level-pill { background: rgba(217, 156, 0, 0.9); color: #fff; }
+.risk-popover--danger .risk-popover__level-pill { background: rgba(208, 64, 64, 0.92); }
 
 .risk-popover__title {
-  margin: 0 0 6px;
-  font-size: 14px;
-  font-weight: 600;
-  color: #222;
-}
-
-.risk-popover__quote {
-  margin: 6px 0;
-  padding: 8px 12px;
-  border-left: 3px solid #d9d9d9;
-  background: #f7f7f7;
-  font-size: 12px;
-  font-style: italic;
-  color: #444;
-  line-height: 1.45;
-}
-
-.risk-popover--good .risk-popover__quote { border-left-color: #1f9d4a; }
-.risk-popover--warn .risk-popover__quote { border-left-color: #d99c00; }
-.risk-popover--danger .risk-popover__quote { border-left-color: #d04040; }
-
-.risk-popover__comment {
-  margin: 6px 0;
-  font-size: 12px;
-  color: #333;
-  line-height: 1.45;
-}
-
-.risk-popover__actions {
-  display: flex;
-  gap: 8px;
-  padding: 10px 16px;
-  border-top: 1px solid #efefef;
-  background: #fafafa;
-  flex-shrink: 0;
-}
-
-.risk-popover__btn {
   flex: 1;
-  height: 32px;
-  border: 1px solid #d9d9d9;
-  border-radius: 6px;
-  background: #fff;
+  min-width: 0;
+  margin: 0;
   font-size: 12px;
+  font-weight: 700;
+  color: #000;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.risk-popover__accept {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 18px;
+  padding: 0 8px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #E6E6E6;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 9px;
   font-weight: 500;
+  color: #000;
   cursor: pointer;
   transition: background-color 0.15s ease, color 0.15s ease;
 }
+.risk-popover__accept:hover { background: #f3f3f3; }
+.risk-popover__accept--active {
+  background: #1f7a1f;
+  color: #fff;
+  border-color: #1f7a1f;
+}
+.risk-popover__accept--active:hover { background: #156115; }
+.risk-popover__accept-arrow { font-size: 12px; line-height: 1; }
 
-.risk-popover__btn:hover:not(:disabled) { background: #f3f3f3; }
-.risk-popover__btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.risk-popover__quote-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.risk-popover__quote-bar {
+  flex-shrink: 0;
+  width: 1px;
+  background: #A2A2A2;
+  border-radius: 1px;
+}
+.risk-popover__quote {
+  flex: 1;
+  margin: 0;
+  font-style: italic;
+  font-weight: 500;
+  font-size: 10px;
+  line-height: 1.3;
+  color: #A2A2A2;
+}
 
-.risk-popover__btn--primary {
+.risk-popover__comment {
+  margin: 4px 0 0;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: #000;
+}
+
+.risk-popover__bottom-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+.risk-popover__recom-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  padding: 0 14px;
+  background: #FFFFFF;
+  border: 1px solid #E6E6E6;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #A2A2A2;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.risk-popover__recom-btn:hover:not(:disabled) { background: #f3f3f3; color: #555; }
+.risk-popover__recom-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.risk-popover__recom-btn--active {
   background: #6c67fd;
   color: #fff;
   border-color: #6c67fd;
 }
 
-.risk-popover__btn--done {
-  background: #fff;
-  color: #1f7a1f;
-  border-color: #1f7a1f;
+.risk-popover__ask {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  padding: 0 12px;
+  background: transparent;
+  border: 1px solid #6c67fd;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 9px;
+  font-weight: 500;
+  color: #6c67fd;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
-.risk-popover__btn--done:hover:not(:disabled) { background: rgba(31, 122, 31, 0.08); }
-.risk-popover__btn--done-active {
-  background: #1f7a1f;
-  color: #fff;
-}
-.risk-popover__btn--done-active:hover:not(:disabled) { background: #156115; }
-.risk-popover__btn--primary:hover:not(:disabled) {
-  background: #5854d8;
-  border-color: #5854d8;
-}
+.risk-popover__ask:hover { background: #6c67fd; color: #fff; }
 
 .risk-popover__recommendations {
   list-style: disc;
-  padding: 6px 0 6px 22px;
-  margin: 8px 0 0;
-  font-size: 12px;
-  color: #333;
+  padding: 4px 0 4px 16px;
+  margin: 6px 0 0;
+  font-size: 10px;
+  font-weight: 500;
+  color: #000;
   line-height: 1.45;
 }
+
+.risk-popover__expand {
+  flex-shrink: 0;
+  width: 32px;
+  border: none;
+  border-left: 1px solid #E6E6E6;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background-color 0.15s ease;
+}
+.risk-popover__expand:hover { background: #f7f7f7; }
+.risk-popover__expand-label {
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  color: #A2A2A2;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  white-space: nowrap;
+}
+
+.risk-popover__close {
+  position: absolute;
+  top: 6px;
+  right: 40px;
+  background: transparent;
+  border: none;
+  color: #A2A2A2;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 50%;
+}
+.risk-popover__close:hover { color: #000; background: #f3f3f3; }
 </style>
 
 <style>
-/* Неscoped: применяется к программно созданным элементам (mammoth-HTML,
-   pdfjs text-layer, динамические mark/overlay), у которых нет data-v-* */
-.pdf-text-layer {
-  position: absolute;
-  top: 0;
-  left: 0;
-  overflow: hidden;
-  line-height: 1;
-  color: transparent;
-  user-select: text;
-  z-index: 1;
-}
-
-.pdf-text-layer span,
-.pdf-text-layer br {
-  color: transparent;
-  position: absolute;
-  white-space: pre;
-  cursor: text;
-  transform-origin: 0% 0%;
-}
-
-.pdf-text-layer ::selection {
-  background: rgba(108, 103, 253, 0.4);
-}
+/* Неscoped: применяется к программно созданным элементам docx-preview и
+   динамическим mark/overlay, у которых нет data-v-* */
 
 .risk-highlight {
   border-radius: 8px;
