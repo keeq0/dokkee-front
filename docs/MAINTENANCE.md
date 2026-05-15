@@ -1,17 +1,18 @@
 # Инструкция по сопровождению фронтенда Dokkee
 
-Документ для разработчика и DevOps, которые отвечают за поддержку фронтенда: тесты, обновление зависимостей, диагностика типичных проблем, регламент релизов.
+Документ описывает регламент сопровождения фронтенд-приложения Dokkee: структура репозитория, тестирование, обновление зависимостей, диагностика типичных проблем, работа в связке с бэкендом `dokkee-backend`.
 
 ## Содержание
 
 1. [Структура репозитория](#1-структура-репозитория)
-2. [Регламент работы с ветками](#2-регламент-работы-с-ветками)
-3. [Тесты и линт](#3-тесты-и-линт)
-4. [Обновление зависимостей](#4-обновление-зависимостей)
-5. [Релизы](#5-релизы)
-6. [Диагностика типичных проблем](#6-диагностика-типичных-проблем)
-7. [Логирование и наблюдаемость](#7-логирование-и-наблюдаемость)
-8. [Контакты и эскалация](#8-контакты-и-эскалация)
+2. [Связка с бэкендом](#2-связка-с-бэкендом)
+3. [Регламент работы с ветками и коммитами](#3-регламент-работы-с-ветками-и-коммитами)
+4. [Тестирование](#4-тестирование)
+5. [Линтинг и стиль кода](#5-линтинг-и-стиль-кода)
+6. [Обновление зависимостей](#6-обновление-зависимостей)
+7. [Сборка и релиз](#7-сборка-и-релиз)
+8. [Диагностика типичных проблем](#8-диагностика-типичных-проблем)
+9. [Логирование и наблюдаемость](#9-логирование-и-наблюдаемость)
 
 ---
 
@@ -19,152 +20,199 @@
 
 ```
 src/
-  views/            Корневые страницы (MainPage, DocumentPage, AnalysisPage, AccountPage)
-  components/       Многоразовые компоненты (UploadDocuments, AnalysisResult, AiAssistant и пр.)
-  composables/      Composition API хуки (useAnalysisProgress, useStreamingText)
-  services/         Бизнес-логика без UI (deepseek, risks, reportExport, highlight)
-  stores/           Pinia-сторы (documents.js хранит per-document state)
-  router/           Vue Router конфиг
-  helpers/          Утилиты общего назначения
+  views/            Корневые страницы маршрутизации (MainPage, DocumentPage,
+                    AnalysisPage, AccountPage, ServicePage).
+  components/       Многоразовые компоненты UI: UploadDocuments, AnalysisResult,
+                    AiAssistant, PromptSettingsModal, ServiceLayout, ServiceHeader.
+  composables/      Composition API хуки: useAnalysisProgress, useStreamingText.
+  services/         Бизнес-логика без UI: deepseek (HTTP-клиент), risks (парсинг
+                    ответа модели), reportExport (markdown -> HTML -> PDF),
+                    highlight (наложение цветных меток на текстовый слой).
+  stores/           Pinia-сторы: documents.js хранит per-document состояние
+                    (url, status, progress, extractedText, htmlPreview,
+                    analysisResult, risks, pinnedRisk, chatHistory).
+  router/           Vue Router (history mode).
+  helpers/          Утилиты общего назначения.
 
 tests/
-  unit/             Vitest, юнит-тесты сервисов и сторов
-  e2e/              Playwright, end-to-end сценарии (HAR-моки DeepSeek)
+  unit/             Vitest, юнит-тесты сервисов и сторов.
+  e2e/              Playwright, end-to-end сценарии. Запросы к бэкенду мокаются
+                    HAR-записями page.routeFromHAR().
 
-docs/               Документация (этот файл и соседние)
-docker-compose.yml  Сервисы frontend/test-unit/test-lint/test-e2e
-Dockerfile          Multi-stage: deps -> dev / test / e2e
+docs/               Документация (этот файл, USER_GUIDE, DEPLOYMENT, ADMIN_GUIDE).
+docker-compose.yml  Сервисы frontend, test-unit, test-lint, test-e2e.
+Dockerfile          Multi-stage: deps -> dev / test / e2e.
 ```
 
-Размер файлов держим в пределах 200-400 строк (макс. 800 — см. `.claude/rules/architecture.md`).
+Размер файлов держится в пределах 200-400 строк, функции — до 50 строк. При превышении модуль декомпозируется по фичам.
 
-## 2. Регламент работы с ветками
+## 2. Связка с бэкендом
 
-- `main` — продакшен-ветка. Защищена, прямые пуши запрещены.
+Фронтенд обращается к бэкенду по HTTP. Маршруты, которые используются интерфейсом:
+
+| Метод  | Маршрут                       | Назначение                                   |
+|--------|-------------------------------|----------------------------------------------|
+| POST   | `/auth/sign-up`               | Регистрация нового пользователя.             |
+| POST   | `/auth/sign-in`               | Аутентификация, возвращает JWT-токен.        |
+| POST   | `/api/documents`              | Загрузка документа (multipart, поле `file`). |
+| GET    | `/api/documents`              | Список документов пользователя.              |
+| GET    | `/api/documents/:id`          | Метаданные документа.                        |
+| GET    | `/api/documents/:id/result`   | Результат анализа.                           |
+| GET    | `/api/profile`                | Профиль текущего пользователя.               |
+| PATCH  | `/api/profile`                | Обновление профиля.                          |
+
+Все маршруты под `/api/*` требуют заголовок `Authorization: Bearer <token>`. Токен фронтенд получает после успешного `/auth/sign-in` и сохраняет в памяти приложения. Базовый URL бэкенда задаётся переменной `VUE_APP_API_BASE_URL` на этапе сборки.
+
+При изменении контракта со стороны бэкенда (`dokkee-backend/internal/handler/*.go`) изменения синхронизируются в `src/services/` фронтенда. Изменение схемы ответа `analysis_results.result_json` затрагивает парсер `src/services/risks.js`.
+
+## 3. Регламент работы с ветками и коммитами
+
+- `main` — production-ветка, прямые пуши запрещены.
 - `issue/<номер>-<кратко>` — рабочая ветка под GitHub issue (например, `issue/19-pdf-canvas-restore`).
-- Коммиты — на русском, префикс `fix:` / `feat:` / `refactor:` / `chore:` и т.п., глагол в прошедшем времени. Если ветка из issue, в конец первой строки добавляется `(#XXXX)`. Подробнее — `.claude/rules/git.md`.
-- PR создаётся из issue-ветки в `main`, ревью обязательно перед merge.
-- После merge ветка удаляется (`gh pr merge --delete-branch`).
+- `docs/<кратко>` — ветка под документацию.
+- Pull Request обязателен. Merge только после прохождения тестов и code review.
 
-Запрещено коммитить:
+Формат сообщений коммитов:
 
-- `.env` с реальными ключами
-- `.claude/`, `.superpowers/`, `.playwright-mcp/`
-- `node_modules/`, `dist/`, `playwright-report/`, `test-results/`
-- `CLAUDE.md`, `CLAUDE.local.md`
+- Префикс с маленькой буквы: `fix:`, `feat:`, `refactor:`, `docs:`, `test:`, `chore:`, `style:`, `build:`, `ci:`, `perf:`.
+- Scope опционален: `feat(scope): описание` либо `fix: описание`.
+- Глагол в прошедшем времени совершенного вида: "добавил", "исправил", "вынес".
+- Если ветка из issue — в конец первой строки добавляется `(#XXXX)`.
 
-## 3. Тесты и линт
+В репозиторий не коммитятся: `.env` с реальными ключами, `node_modules/`, `dist/`, `playwright-report/`, `test-results/`, `coverage/`, `CLAUDE.md`, `CLAUDE.local.md`, `.claude/`, `.superpowers/`.
+
+## 4. Тестирование
 
 ### Локальный запуск
 
 ```bash
 npm run lint              # eslint без авто-фикса
-npm run lint:fix          # с авто-фиксом
-npm run test:unit         # vitest (одноразовый прогон)
+npm run lint:fix          # eslint с авто-фиксом
+npm run test:unit         # vitest, одноразовый прогон
 npm run test:unit:watch   # vitest в watch-режиме
-npm run test:e2e          # playwright (нужен dev-сервер на BASE_URL)
+npm run test:e2e          # playwright (нужен запущенный dev-сервер на BASE_URL)
 ```
 
-После каждого изменения кода прогоняется релевантный набор тестов. Задача не закрывается без зелёных тестов (правило из `.claude/rules/workflow.md`).
+После каждого изменения кода прогоняется релевантный набор тестов. Задача не закрывается без зелёных тестов.
 
 ### Запуск в Docker (watch-режим)
 
 ```bash
 docker compose up -d test-unit test-lint test-e2e
-docker compose logs -f test-unit       # смотреть прогон
+docker compose logs -f test-unit
 ```
 
-`test-e2e` зависит от `frontend` через `condition: service_healthy` — поднимется только когда dev-сервер пройдёт healthcheck.
+Сервис `test-e2e` зависит от `frontend` через `condition: service_healthy` и стартует после healthcheck dev-сервера. Аналогично, для интеграционных сценариев требуется поднятый `dokkee-backend` — иначе e2e идут только на мок-уровне.
 
 ### E2E-нюансы
 
-- Запросы к DeepSeek мокаются через **HAR-записи** (`page.routeFromHAR()`).
-- HAR-файлы коммитятся в репозиторий, ревью diff'а — обязательно. Регенерация — только по явному флагу `E2E_UPDATE_HAR=1` с поднятым backend.
-- Локаторы — `getByRole/getByTestId/getByText`. CSS-селекторы — только в крайнем случае.
-- Внутренние Playwright-правила собраны в `.claude/rules/playwright.md`.
+- Локаторы — `getByRole`, `getByTestId`, `getByText`. CSS-селекторы — в последнюю очередь.
+- Запросы к бэкенду мокаются HAR-записями (`page.routeFromHAR()`). HAR-файлы коммитятся, изменения проходят ревью.
+- Обновление HAR — только по явному флагу `E2E_UPDATE_HAR=1` при поднятом бэкенде.
+- Хардкод таймаутов запрещён, ожидание реализуется через `expect()` на конкретный элемент.
 
-### Coverage
+### Покрытие
 
 ```bash
 npm run test:unit -- --coverage
 ```
 
-Отчёт собирается в `coverage/`. Минимальный порог не зафиксирован — рекомендуется поддерживать `>70%` на `services/` и `stores/`.
+Отчёт сохраняется в `coverage/`. Целевая планка — не ниже 70% по модулям `services/` и `stores/`.
 
-## 4. Обновление зависимостей
+## 5. Линтинг и стиль кода
+
+- ESLint с конфигом `plugin:vue/vue3-essential` + `eslint:recommended`.
+- Composition API + `<script setup>`.
+- Props типизируются через `defineProps<T>()`.
+- Composables именуются с префиксом `use`.
+- Для внешних данных — `unknown` вместо `any`; sanitization через Zod, если данные приходят извне.
+- Анимации — только `transform` и `opacity`.
+- CSS-классы в kebab-case, компоненты в PascalCase.
+- Без `console.log` в production-коде, для отладки — отдельный логгер.
+
+Подробности — в правилах проекта `.claude/rules/typescript.md`, `.claude/rules/web.md`, `.claude/rules/architecture.md`.
+
+## 6. Обновление зависимостей
 
 ### Регламент
 
-- Раз в 2 недели: `npm outdated` + `npm audit`.
-- Минорные/патч-апдейты — пачкой, одним PR с прогоном всех тестов.
-- Мажорные апдейты (особенно `vue`, `pinia`, `vue-router`, `pdfjs-dist`, `playwright`) — отдельным PR с release-notes в описании.
-- При апдейте `playwright` версия в `Dockerfile` (`mcr.microsoft.com/playwright:v1.49.0-jammy`) **должна совпадать** с версией в `package.json`. Это два места — обновлять оба.
+- Раз в две недели: `npm outdated` + `npm audit`.
+- Минорные и патч-обновления — пачкой одним PR.
+- Мажорные обновления — отдельным PR с проверкой по списку критичных пакетов.
+- При обновлении `@playwright/test` версия в `Dockerfile` (`mcr.microsoft.com/playwright:v<x>-jammy`) обновляется параллельно с `package.json` — версии должны совпадать.
 
 ### Критичные пакеты
 
-| Пакет | Риски при обновлении |
-|-------|----------------------|
-| `pdfjs-dist` | Меняется API TextLayer, требуются CSS-переменные `--total-scale-factor`, `--scale-round-x`. Проверять подсветку рисков на PDF. |
-| `docx-preview` | Может измениться вёрстка `section.docx` — проверить padding (важно для DOCX-превью). |
-| `vue` / `pinia` | Composition API совместимость. Проверять реактивность сторов. |
-| `html2pdf.js` | Используется в экспорте отчёта. Проверять итоговый PDF на корректность. |
-| `playwright` | Версия должна совпадать с Docker-образом. |
+| Пакет           | Что проверить после обновления                                            |
+|-----------------|---------------------------------------------------------------------------|
+| `pdfjs-dist`    | Подсветка рисков на PDF: TextLayer требует CSS-переменные `--total-scale-factor` и `--scale-round-x`. |
+| `docx-preview`  | Вёрстка превью DOCX: `section.docx` (padding, поля).                      |
+| `vue`, `pinia`  | Совместимость Composition API, реактивность сторов.                       |
+| `vue-router`    | History mode, SPA-fallback в Nginx.                                       |
+| `html2pdf.js`   | Корректность экспорта отчёта.                                             |
+| `axios`         | Перехватчики (Authorization-заголовок).                                   |
+| `@playwright/test` | Согласованность версии с Docker-образом.                               |
 
 ### Security-аудит
 
 ```bash
 npm audit
-npm audit fix --dry-run    # сначала посмотреть план
-npm audit fix              # если безопасно
+npm audit fix --dry-run
+npm audit fix
 ```
 
-Критичные уязвимости — фиксить вне очереди, отдельный PR с пометкой `security:` в заголовке.
+Уязвимости уровней `high` и `critical` устраняются вне очереди, отдельным PR с префиксом `fix(security):` в заголовке.
 
-## 5. Релизы
+## 7. Сборка и релиз
 
-Сейчас релиз = merge в `main` + публикация статики (см. [DEPLOYMENT.md](DEPLOYMENT.md)). Версионирование `package.json` не используется (`"version": "0.1.0"` зафиксирован). Когда понадобится — переход на SemVer и теги:
+Production-сборка собирается командой `npm run build`. Артефакты `dist/` копируются на сервер и подключаются к Nginx (см. `DEPLOYMENT.md`). Версионирование `package.json` ведётся по SemVer:
 
 ```bash
-npm version patch          # 0.1.0 -> 0.1.1
+npm version patch    # 0.1.0 -> 0.1.1
 git push --follow-tags
 ```
 
 После релиза:
 
-- Прогнать E2E в production-окружении (smoke-набор).
-- Проверить healthcheck nginx-контейнера.
-- Зафиксировать релиз в `CHANGELOG.md` (на старте не ведётся — стоит завести).
+- Прогон smoke-набора e2e в production-окружении.
+- Проверка healthcheck Nginx и бэкенда.
+- Запись в `CHANGELOG.md`: дата релиза, перечень изменений.
 
-## 6. Диагностика типичных проблем
+## 8. Диагностика типичных проблем
 
-### "DeepSeek упал с 401 Unauthorized"
+### Запросы к бэкенду возвращают 401 Unauthorized
 
-Проверить:
+Причины и проверка:
 
-```bash
-echo $VUE_APP_DEEPSEEK_KEY     # должен быть непустым в момент сборки
-curl -H "Authorization: Bearer $KEY" https://api.deepseek.com/v1/models
-```
+- JWT-токен истёк. Решение: пользователь повторно входит, фронтенд получает новый токен.
+- Заголовок `Authorization` не добавляется. Проверить интерсептор в `src/services/deepseek.js` (или соответствующем HTTP-клиенте).
+- На стороне бэкенда сменился `sign_key` без обновления — токены старого пользователя становятся невалидными.
 
-Если ключ валиден, но 401 в браузере — пересобрать бандл: ключ запекается на этапе `npm run build`, старые чанки могут не содержать обновлённого значения.
+### Загрузка документа возвращает 400 unsupported file type
 
-### "PDF загрузился, но текст не выделяется"
+Бэкенд принимает MIME-типы:
 
-Pdf.js v5 требует CSS-переменные на text-layer. Проверить в DevTools:
+- `application/pdf`
+- `application/vnd.openxmlformats-officedocument.wordprocessingml.document` (DOCX)
+- `text/plain`
+
+Если файл `.doc` или иной формат — пользователь получает ошибку. Фронтенд предварительно проверяет тип файла на клиенте и блокирует загрузку.
+
+### PDF загрузился, но текст не выделяется и не подсвечивается
+
+`pdf.js` v5 требует CSS-переменные на текстовом слое. Проверить в DevTools, что у `.pdf-text-layer` заданы:
 
 ```css
-.pdf-text-layer {
-    --total-scale-factor: <число>;
-    --scale-round-x: 1px;
-    --scale-round-y: 1px;
-}
+--total-scale-factor: <число>;
+--scale-round-x: 1px;
+--scale-round-y: 1px;
 ```
 
-Если переменные отсутствуют — регрессия в `AnalysisResult.vue::renderPDF`. См. историю коммита `5940fe0`.
+Если переменных нет — это регрессия в `AnalysisResult.vue::renderPDF`.
 
-### "DOCX отображается с гигантскими полями"
+### DOCX отображается с гигантскими полями
 
-Word зашивает `padding: 56.7pt 42.5pt 56.7pt 56.7pt` в `section.docx`. Перебивается правилом:
+Word зашивает большие отступы в `section.docx`. В превью они перебиваются:
 
 ```css
 .docx-preview :deep(section.docx) {
@@ -172,20 +220,13 @@ Word зашивает `padding: 56.7pt 42.5pt 56.7pt 56.7pt` в `section.docx`. 
 }
 ```
 
-Если правило перестало работать — проверить, что не сломан scoped + `:deep()` (Vue 3.4+).
+Регрессия чаще всего связана с изменением scoped + `:deep()` в Vue.
 
-### "Не парсятся риски от DeepSeek"
+### Риски не парсятся
 
-Парсер `services/risks.js` идёт по трём стадиям: маркеры `<!--RISKS-->` -> код-блоки ` ```json ` -> голые JSON-массивы. Если ни одна не сработала, в консоли будет warn. Включите debug-лог:
+Парсер `services/risks.js` поддерживает несколько форматов ответа модели: блоки маркеров `<!--RISKS--> ... <!--/RISKS-->`, ```json-блоки и голые JSON-массивы. Если ни одна стадия не отработала, в консоли появляется предупреждение с сырым ответом. Сохранить сырой ответ и приложить к задаче в трекере — это позволит расширить парсер.
 
-```js
-// в risks.js временно:
-console.warn('[risks] all parsers failed, raw:', raw);
-```
-
-Скопируйте `raw` и приложите к issue — это сырой ответ модели.
-
-### "E2E падает по таймауту в Docker"
+### E2E падает по таймауту в Docker
 
 Проверить healthcheck:
 
@@ -194,27 +235,20 @@ docker compose ps frontend
 docker compose logs frontend | tail -50
 ```
 
-Если frontend `unhealthy` — dev-сервер не успел подняться. Увеличить `start_period` в `healthcheck` (по умолчанию 30s).
+При статусе `unhealthy` dev-сервер не успевает подняться. В `docker-compose.yml` увеличивается `start_period` healthcheck.
 
-## 7. Логирование и наблюдаемость
+### Не получается войти
 
-Серверного логирования нет (бэкенда нет). Клиентские ошибки можно собрать через Sentry / GlitchTip — **на текущий момент не подключено**, это задача на доработку:
+- Проверить, что бэкенд доступен: `curl -X POST $VUE_APP_API_BASE_URL/auth/sign-in -d '...'`.
+- Проверить логи бэкенда: `docker logs dokkee-env-backend | tail -50`.
+- Если в БД нет пользователя — выполнить регистрацию `POST /auth/sign-up`.
 
-```js
-// src/main.js (рекомендация)
-import * as Sentry from '@sentry/vue';
+## 9. Логирование и наблюдаемость
 
-Sentry.init({
-    app,
-    dsn: process.env.VUE_APP_SENTRY_DSN,
-    environment: process.env.NODE_ENV,
-});
+Клиентских логов в production отдельно не собирается — ошибки отображаются пользователю в виде модальных уведомлений. Серверные логи бэкенда (формат JSON, `logrus`) доступны через:
+
+```bash
+docker compose -f ../dokkee-backend/docker-compose.yaml logs -f dokkee-backend
 ```
 
-Дополнительно при подключении бэкенд-прокси (см. [DEPLOYMENT.md §5](DEPLOYMENT.md#5-production-сборка)) — собирать метрики на стороне прокси (latency запросов к DeepSeek, ошибки, токены).
-
-## 8. Контакты и эскалация
-
-- Issue tracker: GitHub Issues этого репозитория.
-- Критические инциденты (production down) — эскалация на администратора, см. [ADMIN_GUIDE.md](ADMIN_GUIDE.md).
-- Security-уязвимости — не публиковать в open issues. Приватный канал указывается администратором.
+Метрики и события аудита фиксируются на бэкенде в таблице `audit_log` (тип события, хеш пользователя, хеш документа, IP, успех/ошибка, время). Анализ инцидентов выполняется по этой таблице.
