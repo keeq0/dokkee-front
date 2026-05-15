@@ -1091,6 +1091,7 @@ export default {
   width: auto !important;
   max-width: 100% !important;
 }
+
 .content__panel {
   width: 200px;
   transition: all 0.3s ease;
@@ -2060,5 +2061,10 @@ export default {
 
 .risk-highlight--danger {
   background-color: rgba(255, 70, 70, 0.5);
+}
+
+
+.docx {
+  padding: 30px !important;
 }
 </style>

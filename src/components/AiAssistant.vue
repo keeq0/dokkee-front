@@ -1020,15 +1020,15 @@ ${pinnedRisk.section ? `- Раздел/пункт: ${pinnedRisk.section}\n` : ''
   border-width: 2px;
 }
 .chat-pinned-risk--inline.chat-pinned-risk--good {
-  background: rgba(31, 122, 31, 0.85);
+  background: rgba(31, 122, 31, 0.05);
   border-color: rgba(31, 122, 31, 1);
 }
 .chat-pinned-risk--inline.chat-pinned-risk--warn {
-  background: rgba(217, 156, 0, 0.9);
+  background: rgba(217, 156, 0, 0.05);
   border-color: rgba(217, 156, 0, 1);
 }
 .chat-pinned-risk--inline.chat-pinned-risk--danger {
-  background: rgba(208, 64, 64, 0.92);
+  background: rgba(208, 64, 64, 0.05);
   border-color: rgba(208, 64, 64, 1);
 }
 

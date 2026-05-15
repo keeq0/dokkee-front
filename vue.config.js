@@ -14,7 +14,7 @@ module.exports = {
   chainWebpack: config => {
     config.plugin('html')
       .tap(args => {
-        args[0].title = 'DocsCheck — сервис проверки документов';
+        args[0].title = 'Dokkee — сервис проверки документов';
         return args;
       });
   }
