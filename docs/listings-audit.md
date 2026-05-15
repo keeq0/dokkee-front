@@ -1,62 +1,72 @@
-# Аудит листингов диплома
+# Аудит листингов диплома (имитация интеграции с бэкендом)
 
 Документ проверяет 11 листингов диплома (`РЕД_090302_22Т0854_Мякотных.docx`):
 три в главе 3 (Листинг 3.1, 3.2, 3.3) и восемь в Приложении В (Листинг В.1-В.8).
+
+Подход: для защиты диплома проект `dokkee-front` представлен как **единое целое с серверной частью `dokkee-backend`**. Соответственно листинги переписываются как **имитация интеграции** — код, который выглядит так, как если бы фронтенд и бэкенд работали в одном проекте, с реальным контрактом API из `dokkee-backend`.
 
 По каждому листингу проверены:
 
 1. **Подпись** — формат "Листинг N.M – Название".
 2. **Ссылка из текста** — есть ли в основной части фраза "приведён в Листинге N.M" и ведёт ли она на нужный листинг по смыслу.
-3. **Размер** — в основной части диссертации листинги в диапазоне 15-50 строк. В Приложении В размер не ограничен (рекомендуется до ~150 строк, если код требует полной развёрнутой формы).
-4. **Соответствие коду проекта** — построчное сравнение с файлами `dokkee-front` (`src/`, `vue.config.js`, `package.json`).
+3. **Размер** — в основной части до 50 строк, в Приложении В без жёсткого лимита (рекомендуется до ~150).
+4. **Соответствие имитации** — что должно быть в листинге, чтобы он отражал интеграцию фронта и бэка как единого решения.
 
 ---
 
-## Принципиальное замечание
+## Контракт API из dokkee-backend
 
-Реальный проект `dokkee-front` существенно отличается от того, что описывают листинги диплома. Это связано с тем, что в дипломе описана **целевая архитектура с интеграцией бэкенда** (как в проекте `dokkee-backend`: REST API, JWT-токены, авторизация, лендинг, админ-панель), а в репозитории `dokkee-front` реализована **автономная клиентская версия** без бэкенда:
+Маршруты, реально реализованные в бэкенде (`internal/handler/handler.go`):
 
-| Что есть в дипломе | Что есть в проекте |
-|--------------------|--------------------|
-| Лендинг, секция "Как работает", `StepCard` | Лендинга нет, только защищённая часть сервиса |
-| REST API клиент `@/api/client` | Нет такого файла, фронтенд обращается напрямую к `api.deepseek.com` через `src/services/deepseek.js` |
-| JWT-токены, `useAuthStore`, регистрация и логин | Авторизации нет, токены не используются |
-| Vite (`vite.config.js`) | Vue CLI (`vue.config.js`, webpack); Vite используется только в `vitest` |
-| `src/utils/escape.js`, `src/utils/storage.js` | Файлов нет, `escapeHtml` дублируется в `AiAssistant.vue` и `reportExport.js` |
-| Ленивая загрузка маршрутов, защита по auth, admin-роуты | Прямой импорт 4 страниц, без guard-ов |
-| nginx-конфиг с CSP | nginx-конфига в репозитории нет |
-| Composition API setup-стора с `api.post('/documents')` | Options API стор без HTTP-вызовов; всё локально в браузере |
+| Метод | Маршрут | Что делает |
+|-------|---------|-----------|
+| POST  | `/auth/sign-up`             | Регистрация пользователя |
+| POST  | `/auth/sign-in`             | Аутентификация, возвращает `{ token }` (JWT) |
+| POST  | `/api/documents`            | Загрузка документа (multipart, поле `file`), возвращает `{ id }`. Анализ запускается на бэке автоматически в фоне |
+| GET   | `/api/documents`            | Список документов пользователя |
+| GET   | `/api/documents/:id`        | Метаданные документа |
+| GET   | `/api/documents/:id/result` | Результат анализа (или `{ status, message }`, если ещё не готов) |
+| GET   | `/api/profile`              | Профиль текущего пользователя |
+| PATCH | `/api/profile`              | Обновление полей профиля |
 
-Это **обходимо для защиты**, но в листингах нужно либо:
+Все маршруты под `/api/*` требуют заголовок `Authorization: Bearer <token>`. Статусы документа: `queued` -> `processing` -> `completed` либо `failed`.
 
-- (вариант A) пометить в тексте диплома, что листинги показывают **целевую архитектуру**, и привести коды из бэкенда/целевого проекта;
-- (вариант B) **переписать листинги под реальный код** `dokkee-front`. Этот документ предлагает конкретные правки в варианте B.
+**Эндпоинтов нет в бэке**: `/api/auth/refresh`, `/api/ai/chat`, `/api/analytics`, `/api/risks/:id`, `DELETE /api/documents/:id`, `PATCH /api/documents/:id`. В листингах и тексте диплома их использовать нельзя — далее в отчёте указано, чем заменять.
 
-Все предложенные правки выложены ниже **отдельно для каждого листинга**.
+---
+
+## Несоответствия в тексте диплома (требуют правки)
+
+| Где (абз.) | Что в дипломе | Должно быть |
+|------------|----------------|------------|
+| абз. 671   | "Код загрузки приведён в Листинге В.4 (Приложение В)" | "приведён в Листинге В.3 (Приложение В)" — В.4 это nginx-CSP |
+| абз. 671   | "POST-запросом на `/api/documents/upload`" | `POST /api/documents` |
+| абз. 671   | "Сервер возвращает `taskId`, по которому клиент отслеживает статус" | "Сервер возвращает идентификатор документа (`id`), по которому клиент опрашивает статус" |
+| абз. 671   | "polling: ... `GET /api/documents/result/{taskId}` ... сервер не вернёт статус 200 с JSON-объектом результатов" | `GET /api/documents/:id/result` возвращает 202 со статусом `processing`/`queued` или 200 с готовым JSON |
+| абз. 41    | `POST /api/auth/login` | `POST /auth/sign-in` |
+| абз. 41    | "обёртка `apiClient` автоматически запрашивает новый токен через `/api/auth/refresh`" | Бэк не реализует refresh. Либо: "при истечении токена пользователь повторно проходит вход", либо отдельный пункт "доработать бэк, чтобы добавить refresh" |
+| абз. 44    | "Чат с ИИ-помощником использует эндпоинт `POST /api/ai/chat`. Тело запроса содержит documentId, question и опциональное selectedText. Сервер передаёт запрос в DeepSeek API и возвращает ответ клиенту." | Эндпоинта нет. Фактически фронт обращается напрямую к DeepSeek через `src/services/deepseek.js`. Либо переписать абзац под прямой вызов DeepSeek, либо запланировать добавление эндпоинта `POST /api/chat` |
+| абз. 45    | "Работа с документами ... DELETE `/api/documents/:id`, PATCH `/api/documents/:id` (переименование)" | Этих маршрутов нет. Удаление/переименование выполняются только на стороне UI, либо запланировать в бэк |
+| абз. 45    | "Аналитика запрашивается через `GET /api/analytics` с параметрами периода и фильтров" | Эндпоинта нет. Либо данные аналитики собираются на клиенте из `GET /api/documents` + `/api/documents/:id/result`, либо в бэк добавляется агрегирующий маршрут |
+| абз. 718   | "Полный код — в Листинге В.5 (Приложение В)" (имеется в виду CSP) | "Полный код CSP — в Листинге В.4, функция экранирования — в Листинге В.5" |
 
 ---
 
 ## Сводная таблица
 
-| № | Подпись | Ссылка в тексте | Размер (стр) | Файл в проекте | Соответствие кода |
-|---|---------|-----------------|--------------|-----------------|-------------------|
-| 3.1 | OK | OK (абз. 623) | 17 | нет (лендинга нет) | Не соответствует: код вымышлен |
-| 3.2 | OK | OK (абз. 676) | 25 | `src/stores/documents.js` | Не соответствует: другой синтаксис, другие методы |
-| 3.3 | OK | OK (абз. 718) | 17 | `src/components/AiAssistant.vue` (escapeHtml); nginx-конфига нет | Частично: `escapeHtml` в проекте проще |
-| В.1 | OK | OK (абз. 623) | 41 | нет (лендинга нет) | Не соответствует |
-| В.2 | OK | OK (абз. 663) | 56 | нет (карточка как отдельный компонент отсутствует) | Не соответствует |
-| В.3 | OK | OK (абз. 676) | 61 | `src/stores/documents.js` | Не соответствует |
-| В.4 | OK | **Ссылка ведёт не туда** (абз. 671 ссылается на В.4 как "код загрузки" — В.4 это CSP) | 41 | нет nginx-конфига в репозитории | Не соответствует |
-| В.5 | OK | OK (абз. 710); упомянут в 718 ("Полный код – в Листинге В.5") | 17 | `src/components/AiAssistant.vue`, `src/services/reportExport.js` (дубль) | Частично: разные реализации escape |
-| В.6 | OK | OK (абз. 711) | 28 | нет (`src/utils/storage.js` не существует) | Не соответствует |
-| В.7 | OK | OK (абз. 714) | 54 | `src/router/index.js` | Не соответствует: нет lazy loading, нет auth, 4 маршрута вместо 8 |
-| В.8 | OK | OK (абз. 715) | 28 | `vue.config.js` (проект на Vue CLI, не Vite) | Не соответствует: vite в проекте не настроен |
-
-**Итог:**
-- Подписи: 11 из 11 корректны.
-- Ссылки: 10 из 11 корректны, **1 ссылка ведёт не туда** (абз. 671 -> В.4).
-- Размеры: все 11 в норме (в основной части листинги 3.1, 3.2, 3.3 — до 50 строк; в Приложении В допустимы более крупные блоки, максимальный В.3 = 61 строка, что укладывается в практический лимит для приложений).
-- Соответствие коду: 0 листингов полностью соответствуют, 2 частично (3.3 и В.5).
+| № | Подпись | Ссылка | Размер (стр) | Что показывает |
+|---|---------|--------|--------------|----------------|
+| 3.1 | OK | OK (абз. 623) | 17 | Фрагмент компонента лендинга — отдельный проект |
+| 3.2 | OK | OK (абз. 676) | 25 | Pinia-стор `useDocumentsStore` с `upload`/`fetchResult` — имитация интеграции |
+| 3.3 | OK | OK (абз. 718, уточнить В.4/В.5) | 17 | CSP-заголовок + утилита `escapeHtml` |
+| В.1 | OK | OK (абз. 623) | 41 | Полный компонент секции лендинга — отдельный проект |
+| В.2 | OK | OK (абз. 663) | 56 | Компонент карточки риска |
+| В.3 | OK | OK (абз. 676) | 61 | Полный Pinia-стор с интеграцией |
+| В.4 | OK | Правка ссылки в абз. 671 | 41 | nginx-конфиг с CSP — инфраструктура |
+| В.5 | OK | OK (абз. 710); уточнение в 718 | 17 | Функция `escapeHtml` |
+| В.6 | OK | OK (абз. 711) | 28 | Обёртка над `localStorage` |
+| В.7 | OK | OK (абз. 714) | 54 | Vue Router с lazy loading и auth-guard |
+| В.8 | OK | OK (абз. 715) | 28 | Конфигурация сборщика для production |
 
 ---
 
@@ -64,514 +74,611 @@
 
 ### Листинг 3.1 — Фрагмент Vue-компонента секции лендинга
 
-**Расположение в дипломе:** глава 3, абзац 624.
-**Ссылка из текста:** абзац 623: "В Листинге 3.1 приведён фрагмент блока «Как работает»: заголовок, три карточки с иконками и подписями. Полный код представлен в Листинге В.1 (Приложение В)." — корректно.
-**Размер:** 17 строк кода — в диапазоне 15-50.
-**Файл в проекте:** **отсутствует**. В `dokkee-front` лендинга нет; в `src/components/` только компоненты основного сервиса (NavigationPanel, AnalysisDocuments, AnalysisResult, AiAssistant и т.д.).
+**Подпись:** OK. **Ссылка (абз. 623):** OK. **Размер:** 17 строк — норма.
 
-**Соответствие кода:** не соответствует. Импорт `StepCard from './StepCard.vue'` указывает на файл, которого нет в репозитории.
+**Связь с проектом:** относится к отдельному репозиторию **лендинга**, который находится на другом ноутбуке и в `dokkee-front` не подключён. При объединении в единый проект — переносится из репозитория лендинга в `src/components/landing/`.
 
-**Предлагаемая правка:** заменить листинг на реальный компонент основного интерфейса. Пример — `NavigationPanel.vue` или фрагмент `AnalysisResult.vue`. Альтернатива: переименовать листинг и подпись на "Фрагмент бокового меню сервиса" / "Компонент панели документа" и оставить только то, что реально в проекте.
-
-**Предлагаемый код (фрагмент `src/components/NavigationPanel.vue` или аналогичный реальный компонент):**
+**Что должно быть в листинге:**
 
 ```vue
+<!-- src/components/landing/HowItWorks.vue (Листинг 3.1) -->
 <template>
-  <nav class="nav-panel" aria-label="Основная навигация">
-    <ul class="nav-panel__list">
-      <li v-for="item in items" :key="item.route">
-        <router-link :to="item.route" class="nav-panel__link"
-                     active-class="nav-panel__link--active">
-          <component :is="item.icon" class="nav-panel__icon" />
-          <span class="nav-panel__label">{{ item.label }}</span>
-        </router-link>
-      </li>
+  <section class="how-it-works" aria-labelledby="how-title">
+    <h2 id="how-title">Как работает Dokkee</h2>
+    <ul class="cards">
+      <StepCard v-for="(s, i) in steps" :key="i" v-bind="s" />
     </ul>
-  </nav>
+  </section>
 </template>
 <script setup>
 import { ref } from 'vue'
-const items = ref([
-  { route: '/',          label: 'Главная',   icon: 'IconHome' },
-  { route: '/documents', label: 'Документы', icon: 'IconFolder' },
-  { route: '/analysis',  label: 'Аналитика', icon: 'IconChart' },
-  { route: '/account',   label: 'Аккаунт',   icon: 'IconUser' },
+import StepCard from './StepCard.vue'
+const steps = ref([
+  { icon: 'upload',  title: 'Загрузите документ', text: 'PDF, DOCX или TXT.' },
+  { icon: 'analyze', title: 'ИИ анализирует',     text: 'Поиск рисков и ошибок.' },
+  { icon: 'report',  title: 'Получите отчёт',     text: 'Пояснения и заметки.' },
 ])
 </script>
 ```
+
+**Пометка:** код взят из отдельного проекта лендинга; в текущем `dokkee-front` отсутствует.
 
 ---
 
 ### Листинг 3.2 — Pinia-store для работы с анализом документов
 
-**Расположение в дипломе:** глава 3, абзац 677.
-**Ссылка из текста:** абзац 676: "В Листинге 3.2 показан сокращённый store documents... Полный код представлен в Листинге В.3 (Приложение В)." — корректно.
-**Размер:** 25 строк — в норме.
-**Файл в проекте:** `src/stores/documents.js`.
+**Подпись:** OK. **Ссылка (абз. 676):** OK. **Размер:** 25 строк — норма.
 
-**Соответствие кода:** **не соответствует.**
+**Имитация интеграции:** стор обращается к реальным эндпоинтам бэка. После `POST /api/documents` бэк сам ставит документ в очередь анализа; клиент опрашивает `GET /api/documents/:id/result`, пока не вернётся 200.
 
-| Что в дипломе | Что в проекте |
-|---------------|---------------|
-| `defineStore('documents', () => { ... })` (setup-синтаксис) | `defineStore('documents', { state, getters, actions })` (options-синтаксис) |
-| Поля: `list`, `current`, `isLoading` | Поля: `items`, `selectedId` |
-| Методы: `upload(file)`, `analyze(id)` — отправляют HTTP в `/documents` и `/documents/:id/analyze` | Методы: `addFile(file)`, `select(id)`, `remove(id)` — работают **локально**, без HTTP-вызовов |
-| Импорт `import { api } from '@/api/client'` | Этого модуля в проекте нет |
-
-**Предлагаемая правка:** заменить листинг на реальный фрагмент `src/stores/documents.js` (сокращённый до 20-25 строк):
+**Что должно быть в листинге:**
 
 ```javascript
+// src/stores/documents.js (Листинг 3.2)
 import { defineStore } from 'pinia'
-import { getFileExtension } from '@/helpers/fileUtils'
+import { ref } from 'vue'
+import { api } from '@/api/client'
 
-export const DOCUMENT_STATUS = Object.freeze({
-  IDLE: 'idle', EXTRACTING: 'extracting',
-  ANALYZING: 'analyzing', DONE: 'done', ERROR: 'error'
-})
+export const useDocumentsStore = defineStore('documents', () => {
+  const list = ref([])
+  const current = ref(null)
+  const isLoading = ref(false)
 
-export const useDocumentsStore = defineStore('documents', {
-  state: () => ({ items: [], selectedId: null }),
-  getters: {
-    selected: (s) => s.items.find((i) => i.id === s.selectedId) || null
-  },
-  actions: {
-    addFile(file) {
-      const ext = getFileExtension(file.name)
-      const url = URL.createObjectURL(file)
-      const record = {
-        id: Date.now(), name: file.name, file, url, type: ext,
-        status: DOCUMENT_STATUS.IDLE, risks: [], chatHistory: []
-      }
-      this.items.push(record)
-      if (this.selectedId === null) this.selectedId = record.id
-      return record
-    },
-    select(id) { this.selectedId = id }
+  async function upload(file) {
+    isLoading.value = true
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const { data } = await api.post('/api/documents', form)
+      list.value.unshift(data)
+      return data
+    } finally {
+      isLoading.value = false
+    }
   }
+
+  async function fetchResult(id) {
+    const { data, status } = await api.get(`/api/documents/${id}/result`)
+    if (status === 200 && current.value?.id === id) {
+      current.value.risks = data.result_json.risks
+    }
+    return { status, data }
+  }
+
+  return { list, current, isLoading, upload, fetchResult }
 })
 ```
+
+**Изменения относительно текущей версии диплома:**
+- `api.post('/documents', { file })` -> `api.post('/api/documents', form)` (multipart FormData, как реально принимает бэк).
+- Метод `analyze(id)` убран — анализ инициируется бэкендом автоматически после загрузки.
+- Добавлен `fetchResult(id)`, опрашивающий `/api/documents/:id/result`. Возвращает `status` ответа, чтобы клиент мог отличить "ещё не готово" (202) от "готово" (200).
 
 ---
 
 ### Листинг 3.3 — Настройка Content Security Policy и санитизация ввода
 
-**Расположение в дипломе:** глава 3, абзац 719.
-**Ссылка из текста:** абзац 718: "В Листинге 3.3 показан ключевой фрагмент — настройка CSP в nginx-конфиге и утилита экранирования HTML. Полный код — в Листинге В.5 (Приложение В)." — **частично корректно**. Ссылка на В.5 покрывает только функцию `escapeHtml`, а полный nginx-CSP находится в Листинге В.4. Корректнее: "Полный код CSP — в Листинге В.4, функция санитизации — в Листинге В.5".
+**Подпись:** OK. **Ссылка (абз. 718):** требует уточнения формулировки в тексте диплома: "Полный код CSP — в Листинге В.4, функция экранирования — в Листинге В.5".
+**Размер:** 17 строк — норма.
 
-**Размер:** 17 строк — в норме.
-**Файлы в проекте:**
-- nginx-конфиг в репозитории **отсутствует** (это инфраструктурная часть, не часть фронтенда).
-- `escapeHtml` реально есть, но в двух разных местах с разными реализациями:
+**Что должно быть в листинге:**
 
-`src/components/AiAssistant.vue`:
+```nginx
+# /etc/nginx/conf.d/dokkee.conf (Листинг 3.3)
+# Content Security Policy для production-домена
+
+add_header Content-Security-Policy "
+  default-src 'self';
+  script-src  'self' 'nonce-$request_id';
+  style-src   'self' 'unsafe-inline';
+  img-src     'self' data: https://cdn.dokkee.ru;
+  connect-src 'self' https://api.dokkee.ru;
+  frame-ancestors 'none';
+" always;
+```
+
 ```javascript
-escapeHtml(str) {
-  return str.replace(/[&<>]/g, (m) => {
-    if (m === '&') return '&amp;';
-    if (m === '<') return '&lt;';
-    if (m === '>') return '&gt;';
-    return m;
-  });
+// src/utils/escape.js (Листинг 3.3)
+// Экранирование пользовательского ввода перед выводом в DOM
+export function escapeHtml(str) {
+  if (typeof str !== 'string') return ''
+  return str
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 }
 ```
 
-`src/services/reportExport.js`:
-```javascript
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-```
-
-**Соответствие кода:** частичное.
-- В версии диплома экранируются `&`, `<`, `>`, `"`, `'` (5 символов).
-- В реальном `AiAssistant.vue` — только `&`, `<`, `>` (3 символа).
-- В `reportExport.js` — `&`, `<`, `>`, `"` (4 символа, без `'`).
-
-**Предлагаемая правка:** заменить текст листинга на реальный код из `reportExport.js` (он ближе всего к версии диплома) и убрать упоминание `'`:
-
-```javascript
-// src/services/reportExport.js — экранирование пользовательского ввода
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-```
-
-Что касается nginx-CSP — оставить как есть, но **в тексте диплома указать**, что nginx-конфиг относится к инфраструктуре развёртывания (документ `DEPLOYMENT.md`), а не к коду фронтенда.
-
-**Также исправить ссылку в абзаце 718**: "Полный код CSP — в Листинге В.4, функция экранирования — в Листинге В.5".
+**Изменение:** функция `escapeHtml` выносится в отдельный модуль `src/utils/escape.js` (сейчас в проекте дублируется в `AiAssistant.vue` и `reportExport.js` с разными реализациями).
 
 ---
 
-### Листинг В.1 — Vue-компонент секции "Как работает" лендинга (полный)
+### Листинг В.1 — Полный Vue-компонент секции "Как работает" лендинга
 
-**Расположение:** Приложение В, абзац 1449.
-**Ссылка из текста:** абзац 623 — "Полный код представлен в Листинге В.1 (Приложение В)" — корректна.
-**Размер:** 40 строк — в норме.
-**Файл в проекте:** **отсутствует**.
+**Подпись:** OK. **Ссылка (абз. 623):** OK. **Размер:** 41 строка — норма.
 
-**Соответствие кода:** не соответствует. Используется `@vueuse/core` (нет в зависимостях проекта), компонент `StepCard.vue` отсутствует, лендинга нет.
+**Связь с проектом:** относится к отдельному репозиторию лендинга. **Код переносится из проекта лендинга при объединении.**
 
-**Предлагаемая правка (вариант 1, если оставить тему лендинга):** добавить в проект минимальную страницу-лендинг и реальный `StepCard.vue`, после чего привести их в листинге. **Это потребует реализации.**
-
-**Предлагаемая правка (вариант 2, рекомендуется):** заменить тему листинга на "Полный код компонента панели документа" и привести `src/components/AnalysisResult.vue` (фрагмент 35-40 строк):
+**Что должно быть в листинге:**
 
 ```vue
+<!-- src/components/landing/HowItWorks.vue (Листинг В.1) -->
 <template>
-  <section class="analysis-result" :class="{ 'is-loading': loading }">
-    <header class="analysis-result__head">
-      <h2 class="analysis-result__title">{{ document.name }}</h2>
-      <FileSelector v-if="documents.length > 1" :documents="documents"
-                    :selected-id="document.id" @select="$emit('select', $event)" />
-    </header>
-    <div ref="previewContainer" class="analysis-result__preview"></div>
-    <RiskPanel v-if="document.risks.length"
-               :risks="document.risks" :pinned="document.pinnedRisk"
-               @select="onSelectRisk" @accept="onAcceptRisk" />
+  <section ref="sectionRef" class="how-it-works" :class="{ 'is-visible': isVisible }"
+           aria-labelledby="how-title">
+    <h2 id="how-title" class="how-it-works__title">Как работает Dokkee</h2>
+    <ul class="how-it-works__cards">
+      <StepCard v-for="(s, i) in steps" :key="i" v-bind="s"
+                :class="`how-it-works__card how-it-works__card--${i}`" />
+    </ul>
   </section>
 </template>
-<script>
-import { renderAsync as renderDocxAsync } from 'docx-preview'
-import RiskPanel from './RiskPanel.vue'
-import FileSelector from './FileSelector.vue'
-export default {
-  name: 'AnalysisResult',
-  components: { RiskPanel, FileSelector },
-  props: {
-    document: { type: Object, required: true },
-    documents: { type: Array, default: () => [] }
-  },
-  data() {
-    return { loading: false, pdfjsLib: null }
-  },
-  methods: {
-    onSelectRisk(risk) { this.$emit('select-risk', risk) },
-    onAcceptRisk(risk) { this.$emit('accept-risk', risk) }
-  }
-}
+<script setup>
+import { ref, onMounted } from 'vue'
+import StepCard from './StepCard.vue'
+import { useIntersectionObserver } from '@vueuse/core'
+const sectionRef = ref(null)
+const isVisible = ref(false)
+const steps = ref([
+  { icon: 'upload',  title: 'Загрузите документ',
+    text: 'Перетащите PDF, DOCX или TXT в область загрузки.' },
+  { icon: 'analyze', title: 'ИИ анализирует',
+    text: 'DeepSeek находит риски, противоречия и скрытые обязательства.' },
+  { icon: 'report',  title: 'Получите отчёт',
+    text: 'Пояснения к каждому риску, заметки, экспорт в PDF.' },
+])
+onMounted(() => {
+  useIntersectionObserver(sectionRef, ([{ isIntersecting }]) => {
+    if (isIntersecting) isVisible.value = true
+  }, { threshold: 0.3 })
+})
 </script>
+<style scoped>
+.how-it-works { padding: 6rem 1.5rem; background: var(--color-bg-soft); }
+.how-it-works__title { font-size: 2.25rem; text-align: center; margin-bottom: 3rem; }
+.how-it-works__cards { display: grid; gap: 1.5rem;
+                       grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.how-it-works__card { opacity: 0; transform: translateY(24px);
+                       transition: opacity 0.6s ease, transform 0.6s ease; }
+.is-visible .how-it-works__card--0 { opacity: 1; transform: none; transition-delay: 0s; }
+.is-visible .how-it-works__card--1 { opacity: 1; transform: none; transition-delay: 0.15s; }
+.is-visible .how-it-works__card--2 { opacity: 1; transform: none; transition-delay: 0.3s; }
+</style>
 ```
+
+**Пометка:** код взят из отдельного проекта лендинга. При объединении репозиториев — `@vueuse/core` добавляется в `package.json` основного проекта.
 
 ---
 
 ### Листинг В.2 — Компонент карточки риска
 
-**Расположение:** Приложение В, абзац 1495.
-**Ссылка из текста:** абзац 663 — "Компонент карточки риска представлен в Листинге В.2 (Приложение В)" — корректна.
-**Размер:** 56 строк — в норме для приложения.
-**Файл в проекте:** **отдельного компонента карточки риска нет**; риски рендерятся внутри `AnalysisResult.vue` или соответствующего риск-блока.
+**Подпись:** OK. **Ссылка (абз. 663):** OK. **Размер:** 56 строк — норма для приложения.
 
-**Соответствие кода:** не соответствует.
-- В дипломе: импорт `StatusPicker`, `NoteEditor` (этих компонентов нет).
-- Используются `defineProps`/`defineEmits` (setup-синтаксис), severity-словарь.
-- Реально риски в проекте имеют поля `level`/`name`/`quote`/`recommendations`/`comment`, а не `severity`/`title`/`explanation`/`note`.
+**Имитация интеграции:** карточка получает данные от бэка из поля `result_json.risks[]`. Структура объекта риска приходит в формате, который бэк сохраняет в `analysis_results.result_json` (поля `severity`, `title`, `quote`, `explanation`).
 
-**Предлагаемая правка:** урезать до 35-40 строк и привести реальный код карточки риска из соответствующего фрагмента `src/components/AnalysisResult.vue`:
+**Что должно быть в листинге:**
 
 ```vue
+<!-- src/components/RiskCard.vue (Листинг В.2) -->
 <template>
-  <article :class="['risk-panel__item', `risk-panel__item--${levelKey}`,
-                    { 'risk-panel__item--active': isPinned }]">
-    <header class="risk-panel__item-head">
-      <span class="risk-panel__item-level">{{ levelLabel }}</span>
-      <button class="risk-panel__item-jump" @click="$emit('select', risk)">
+  <article :class="['risk-card', `risk-card--${risk.severity}`,
+                    { 'risk-card--active': isActive }]"
+           :aria-labelledby="`risk-${risk.id}-title`">
+    <header class="risk-card__head">
+      <Icon :name="icon" class="risk-card__icon" />
+      <span class="risk-card__badge">{{ severityLabel }}</span>
+      <button class="risk-card__link-btn"
+              @click="$emit('scroll-to', risk.anchor)"
+              aria-label="Перейти к фрагменту в документе">
         К фрагменту
       </button>
     </header>
-    <h4 class="risk-panel__item-title">{{ risk.name }}</h4>
-    <blockquote class="risk-panel__item-quote">{{ risk.quote }}</blockquote>
-    <p class="risk-panel__item-comment">{{ risk.comment }}</p>
-    <ul v-if="risk.recommendations?.length" class="risk-panel__item-recs">
-      <li v-for="(rec, i) in risk.recommendations" :key="i">{{ rec }}</li>
-    </ul>
-    <button class="risk-panel__item-accept" @click="$emit('accept', risk)">
-      Принять риск
-    </button>
+    <h3 :id="`risk-${risk.id}-title`" class="risk-card__title">
+      {{ risk.title }}
+    </h3>
+    <blockquote class="risk-card__quote">{{ risk.quote }}</blockquote>
+    <p class="risk-card__explanation">{{ risk.explanation }}</p>
+    <footer class="risk-card__footer">
+      <StatusPicker :value="risk.status" @update="handleStatusChange" />
+      <button @click="isNoteOpen = !isNoteOpen">
+        {{ risk.note ? 'Изменить заметку' : 'Добавить заметку' }}
+      </button>
+    </footer>
+    <NoteEditor v-if="isNoteOpen" :value="risk.note"
+                @save="(n) => emit('save-note', risk.id, n)" />
   </article>
 </template>
-<script>
-const LEVEL_LABELS = {
-  high: 'Большие риски', medium: 'Средние риски',
-  low:  'Малые риски',   accepted: 'Готово'
+<script setup>
+import { computed, ref } from 'vue'
+import StatusPicker from './StatusPicker.vue'
+import NoteEditor from './NoteEditor.vue'
+const props = defineProps({
+  risk:     { type: Object,  required: true },
+  isActive: { type: Boolean, default: false },
+})
+const emit = defineEmits([
+  'change-status', 'scroll-to', 'save-note',
+])
+const isNoteOpen = ref(false)
+const SEVERITY_LABEL = {
+  critical:   'Критический',
+  suspicious: 'Сомнительный',
+  info:       'Информация',
 }
-export default {
-  name: 'RiskCard',
-  props: {
-    risk:     { type: Object,  required: true },
-    isPinned: { type: Boolean, default: false }
-  },
-  computed: {
-    levelKey() { return this.risk.level || 'medium' },
-    levelLabel() { return LEVEL_LABELS[this.levelKey] }
-  }
+const SEVERITY_ICON = {
+  critical:   'alert-triangle',
+  suspicious: 'help-circle',
+  info:       'info',
+}
+const severityLabel = computed(() => SEVERITY_LABEL[props.risk.severity])
+const icon = computed(() => SEVERITY_ICON[props.risk.severity])
+function handleStatusChange(status) {
+  emit('change-status', props.risk.id, status)
 }
 </script>
 ```
+
+**Изменения относительно текущей версии диплома:**
+- Убран `'ask-ai'` из `defineEmits` (нет соответствующего эндпоинта; чат с ИИ работает на уровне страницы, а не карточки риска).
+- Заменены ёлочки `»` на обычные двойные кавычки в `aria-label` (текущий вариант с `»` — синтаксическая ошибка Vue).
+- Заменена стрелка-юникод "→" на текст "К фрагменту" (см. правила оформления в `.claude/rules/git.md` и стилистику диплома).
+- Локализованные словари переименованы в `SCREAMING_SNAKE_CASE` (`SEVERITY_LABEL`, `SEVERITY_ICON`) — традиционное оформление констант в JS.
 
 ---
 
 ### Листинг В.3 — Pinia-store для работы с документами и анализом (полная версия)
 
-**Расположение:** Приложение В, абзац 1556.
-**Ссылка из текста:** абзац 676 — корректна.
-**Размер:** 61 строка — в норме для приложения.
-**Файл в проекте:** `src/stores/documents.js`.
+**Подпись:** OK. **Ссылка (абз. 676):** OK. **Размер:** 61 строка — норма для приложения.
 
-**Соответствие кода:** **не соответствует.** Принципиальные отличия те же, что в Листинге 3.2:
+**Имитация интеграции:** полная версия стора с обращением к реальным эндпоинтам бэка, polling-стратегией для получения результата, локальной отменой смены статуса риска (бэк отдельного эндпоинта `/api/risks/:id` не имеет, поэтому смена статуса — клиентское состояние).
 
-- В дипломе: setup-синтаксис, импорт `api` из `@/api/client`, импорт `useToastStore` из `./toast`. HTTP-вызовы `/documents`, `/documents/:id/analyze`, `/risks/:id`.
-- В проекте: options-синтаксис, нет `api`-клиента, нет toast-стора. Документы хранятся локально, анализ выполняется через `src/services/deepseek.js` (прямой вызов DeepSeek).
-- Поле `severity === 'critical'` — реально используется `level === 'high'`.
-
-**Предлагаемая правка:** заменить полностью на реальный сокращённый код `src/stores/documents.js` (около 45 строк):
+**Что должно быть в листинге:**
 
 ```javascript
+// src/stores/documents.js (Листинг В.3)
 import { defineStore } from 'pinia'
-import { getFileExtension } from '@/helpers/fileUtils'
+import { computed, ref } from 'vue'
+import { api } from '@/api/client'
+import { useToastStore } from './toast'
 
-export const DOCUMENT_STATUS = Object.freeze({
-  IDLE: 'idle', EXTRACTING: 'extracting',
-  ANALYZING: 'analyzing', DONE: 'done', ERROR: 'error'
-})
+export const useDocumentsStore = defineStore('documents', () => {
+  const list = ref([])
+  const current = ref(null)
+  const isLoading = ref(false)
+  const analysisStatus = ref('idle')
+  const toast = useToastStore()
 
-let nextId = 1
-function createRecord({ file, name, type, url }) {
-  return {
-    id: nextId++, name: name || file?.name || 'Документ',
-    file, url, type, status: DOCUMENT_STATUS.IDLE, progress: 0,
-    extractedText: '', htmlPreview: '', analysisResult: null,
-    risks: [], pinnedRisk: null, chatHistory: [], conversation: []
+  const criticalRisksCount = computed(() => {
+    if (!current.value) return 0
+    return current.value.risks.filter((r) => r.severity === 'critical').length
+  })
+
+  async function fetchList() {
+    const { data } = await api.get('/api/documents')
+    list.value = data.documents
   }
-}
 
-export const useDocumentsStore = defineStore('documents', {
-  state: () => ({ items: [], selectedId: null }),
-  getters: {
-    selected: (s) => s.items.find((i) => i.id === s.selectedId) || null,
-    byId: (s) => (id) => s.items.find((i) => i.id === id) || null
-  },
-  actions: {
-    addFile(file) {
-      const type = getFileExtension(file.name)
-      if (!['pdf', 'docx'].includes(type)) return null
-      const url = URL.createObjectURL(file)
-      const record = createRecord({ file, name: file.name, type, url })
-      this.items.push(record)
-      if (this.selectedId === null) this.selectedId = record.id
-      return record
-    },
-    select(id) { this.selectedId = id },
-    remove(id) {
-      this.items = this.items.filter((i) => i.id !== id)
-      if (this.selectedId === id) {
-        this.selectedId = this.items[0]?.id ?? null
-      }
-    },
-    setRisks(id, risks) {
-      const doc = this.items.find((i) => i.id === id)
-      if (doc) doc.risks = risks
+  async function upload(file) {
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('Файл больше 10 МБ')
+      return null
     }
+    isLoading.value = true
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const { data } = await api.post('/api/documents', form)
+      list.value.unshift(data)
+      return data
+    } catch (err) {
+      toast.error('Не удалось загрузить файл')
+      return null
+    } finally {
+      isLoading.value = false
+    }
+  }
+
+  async function pollResult(id, intervalMs = 2000) {
+    analysisStatus.value = 'running'
+    while (true) {
+      const { status, data } = await api.get(`/api/documents/${id}/result`)
+      if (status === 200) {
+        if (current.value?.id === id) {
+          current.value.risks = data.result_json.risks
+        }
+        analysisStatus.value = 'done'
+        return data
+      }
+      if (data.status === 'failed') {
+        analysisStatus.value = 'error'
+        toast.error('Анализ завершился ошибкой')
+        return null
+      }
+      await new Promise((r) => setTimeout(r, intervalMs))
+    }
+  }
+
+  function changeRiskStatus(riskId, status) {
+    if (!current.value) return
+    const risk = current.value.risks.find((r) => r.id === riskId)
+    if (risk) risk.status = status
+  }
+
+  return {
+    list, current, isLoading, analysisStatus, criticalRisksCount,
+    fetchList, upload, pollResult, changeRiskStatus,
   }
 })
 ```
+
+**Изменения относительно текущей версии диплома:**
+- `api.post('/documents', formData)` -> `api.post('/api/documents', form)`. URL приведён к реальному бэку, размер ограничен 10 МБ (как в бэке).
+- `analyze(id)` заменён на `pollResult(id)` — анализ запускается бэком автоматически после загрузки, клиент опрашивает результат до получения 200.
+- Метод `changeRiskStatus` стал синхронным и работает только локально: отдельного эндпоинта `/api/risks/:id` в бэке нет.
 
 ---
 
 ### Листинг В.4 — Настройка CSP, санитизация и защита от XSS
 
-**Расположение:** Приложение В, абзац 1620.
-**Ссылки из текста:**
-- абзац 671: "Код загрузки приведён в Листинге В.4 (Приложение В)" — **ССЫЛКА ВЕДЁТ НЕ ТУДА.** Листинг В.4 — это nginx-конфиг с CSP, а не код загрузки документа. Код загрузки находится в Листинге В.3 (метод `upload` Pinia-стора).
+**Подпись:** OK. **Ссылка:** на В.4 есть в абзаце 671 ("Код загрузки приведён в Листинге В.4") — это ошибка, нужно заменить на В.3.
+**Размер:** 41 строка — норма.
 
-**Правка для текста диплома:** в абзаце 671 заменить "приведён в Листинге В.4 (Приложение В)" на "приведён в Листинге В.3 (Приложение В)".
+**Имитация интеграции:** nginx-конфиг для production-домена, перед которым стоит фронтенд и проксируются запросы на бэкенд по `/api/`.
 
-**Размер:** 41 строка — в норме.
-**Файл в проекте:** **nginx-конфига в репозитории нет**. Это инфраструктурная часть (документация в `docs/DEPLOYMENT.md`).
+**Что должно быть в листинге:**
 
-**Соответствие кода:** не соответствует — но это допустимо для приложения "целевая инфраструктура". Можно оставить как пример конфигурации развёртывания.
+```nginx
+# /etc/nginx/conf.d/dokkee.conf (Листинг В.4)
+# CSP + security headers + reverse proxy на dokkee-backend
 
-**Рекомендация:** добавить во вступление к Приложению В (абзацы 794-795 "Листинги кода пользовательского интерфейса") отдельный подзаголовок для конфигурационных листингов или переименовать листинг В.4 в "Пример конфигурации Nginx для production-развёртывания фронтенда".
+server {
+  listen 443 ssl http2;
+  server_name dokkee.ru www.dokkee.ru;
 
-Конкретное содержимое листинга оставить как есть — конфигурация корректна и применима.
+  ssl_certificate     /etc/letsencrypt/live/dokkee.ru/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/dokkee.ru/privkey.pem;
+  ssl_protocols TLSv1.2 TLSv1.3;
+
+  add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+  add_header Content-Security-Policy "
+    default-src 'self';
+    script-src  'self' 'nonce-$request_id';
+    style-src   'self' 'unsafe-inline';
+    img-src     'self' data: https://cdn.dokkee.ru;
+    connect-src 'self' https://api.dokkee.ru;
+    font-src    'self' data:;
+    frame-ancestors 'none';
+    base-uri    'self';
+  " always;
+  add_header X-Content-Type-Options nosniff always;
+  add_header X-Frame-Options DENY always;
+  add_header Referrer-Policy strict-origin-when-cross-origin always;
+  add_header Permissions-Policy "geolocation=(), camera=(), microphone=()" always;
+
+  location / {
+    root /var/www/dokkee-frontend;
+    try_files $uri $uri/ /index.html;
+    expires 1y;
+    add_header Cache-Control "public, immutable";
+  }
+  location /index.html { add_header Cache-Control "no-store"; }
+
+  location /api/ {
+    proxy_pass http://dokkee-backend:8000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    client_max_body_size 12M;
+  }
+  location /auth/ {
+    proxy_pass http://dokkee-backend:8000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+  }
+}
+```
+
+**Изменения относительно текущей версии диплома:**
+- Reverse proxy `/api/` направлен на `dokkee-backend:8000` (имя сервиса из `dokkee-backend/docker-compose.yaml`).
+- Добавлен отдельный `location /auth/` — у бэка маршруты `sign-in/sign-up` лежат не под `/api/`, а под корневым `/auth/`.
+- `client_max_body_size 12M` соответствует лимиту бэка в 10 МБ + накладные multipart.
 
 ---
 
 ### Листинг В.5 — Функция экранирования HTML
 
-**Расположение:** Приложение В, абзац 1675.
-**Ссылки из текста:**
-- абзац 710: "Код функции приведён в Листинге В.5 (Приложение В)" — корректна.
-- абзац 718: "Полный код — в Листинге В.5 (Приложение В)" — частично, т.к. в 718 имеется в виду CSP, а CSP в В.4, не в В.5. См. правку в Листинге 3.3.
+**Подпись:** OK. **Ссылка (абз. 710):** OK. **Размер:** 17 строк — норма.
 
-**Размер:** 17 строк — в норме.
-**Файлы в проекте:**
-- `src/components/AiAssistant.vue` (метод `escapeHtml` — упрощённая версия без `"` и `'`).
-- `src/services/reportExport.js` (функция `escapeHtml` — с `"`, без `'`).
-- Файла `src/utils/escape.js` **нет**; функция дублируется.
+**Имитация интеграции:** функция выносится в общий модуль `src/utils/escape.js` и используется во всех местах, где в DOM подставляется текст, пришедший от бэка (риски, цитаты, чат с ИИ).
 
-**Соответствие кода:** не соответствует. Версия в дипломе экранирует 5 символов (`&<>"'`), есть `stripTags`. В проекте — только `&<>` (AiAssistant) или `&<>"` (reportExport), функции `stripTags` нет.
-
-**Предлагаемая правка (вариант A):** провести рефакторинг в проекте — создать `src/utils/escape.js` с реализацией из диплома, использовать его в `AiAssistant.vue` и `reportExport.js`. После этого код листинга станет правдой.
-
-**Предлагаемая правка (вариант B, без правки кода проекта):** привести в листинге реальную реализацию из `reportExport.js`:
+**Что должно быть в листинге:**
 
 ```javascript
-// src/services/reportExport.js — экранирование пользовательского ввода
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
+// src/utils/escape.js (Листинг В.5)
+// Экранирование HTML для безопасного вывода данных от бэкенда и ИИ
+const ESCAPE_MAP = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
 }
 
-// src/components/AiAssistant.vue — упрощённая версия для рендера сообщений чата
-function escapeHtmlChat(str) {
-  return str.replace(/[&<>]/g, (m) => {
-    if (m === '&') return '&amp;'
-    if (m === '<') return '&lt;'
-    if (m === '>') return '&gt;'
-    return m
-  })
+export function escapeHtml(str) {
+  if (typeof str !== 'string') return ''
+  return str.replace(/[&<>"']/g, (ch) => ESCAPE_MAP[ch] || ch)
+}
+
+export function stripTags(html) {
+  if (typeof html !== 'string') return ''
+  return html.replace(/<[^>]*>/g, '')
 }
 ```
 
-В тексте абзаца 710 можно отдельно отметить, что для сообщений чата используется упрощённая версия (без `"` и `'`), так как они туда не попадают.
+**Изменения относительно текущей версии:** код корректен. **Что нужно изменить в проекте:** удалить дублирующиеся `escapeHtml` из `src/components/AiAssistant.vue` и `src/services/reportExport.js`, импортировать единый вариант из `src/utils/escape.js`.
 
 ---
 
 ### Листинг В.6 — Типизированная обёртка над localStorage
 
-**Расположение:** Приложение В, абзац 1697.
-**Ссылка из текста:** абзац 711 — "Обёртка для безопасной работы с localStorage приведена в Листинге В.6 (Приложение В)" — корректна.
-**Размер:** 28 строк — в норме.
-**Файл в проекте:** **отсутствует.** `src/utils/storage.js` не существует. Поиск по `grep "localStorage"` в `src/` даёт пустой результат.
+**Подпись:** OK. **Ссылка (абз. 711):** OK. **Размер:** 28 строк — норма.
 
-**Соответствие кода:** не соответствует — кода в проекте нет вообще.
+**Имитация интеграции:** обёртка используется для хранения JWT-токена, полученного из `POST /auth/sign-in`, и пользовательских настроек интерфейса.
 
-**Предлагаемая правка (вариант A):** реализовать `src/utils/storage.js` в проекте — это полезный кусок инфраструктуры. **Требует кода.**
+**Что должно быть в листинге:**
 
-**Предлагаемая правка (вариант B):** убрать Листинг В.6 из приложения и удалить ссылку на него из абзаца 711. В тексте абзаца оставить только описание токенов без упоминания обёртки localStorage.
+```javascript
+// src/utils/storage.js (Листинг В.6)
+// Обёртка над localStorage с обработкой JSON и ошибок (приватный режим, квота)
+const PREFIX = 'dokkee:'
 
-**Рекомендация:** вариант A — функция короткая и осмысленная, добавить её в проект 5 минут. Тогда листинг подкреплён реальным кодом.
+export const storage = {
+  get(key, defaultValue) {
+    try {
+      const raw = localStorage.getItem(PREFIX + key)
+      return raw === null ? defaultValue : JSON.parse(raw)
+    } catch (err) {
+      return defaultValue
+    }
+  },
+  set(key, value) {
+    try {
+      localStorage.setItem(PREFIX + key, JSON.stringify(value))
+    } catch (err) {
+      console.warn('storage.set failed', err)
+    }
+  },
+  remove(key) {
+    localStorage.removeItem(PREFIX + key)
+  },
+  clear() {
+    Object.keys(localStorage)
+      .filter((k) => k.startsWith(PREFIX))
+      .forEach((k) => localStorage.removeItem(k))
+  },
+}
+```
+
+**Изменения относительно диплома:** код корректен. Префикс изменён на `dokkee:` (под имя проекта `dokkee-front`/`dokkee-backend`, а не `dockee:`).
+**Что нужно создать в проекте:** файла `src/utils/storage.js` сейчас нет; при имитации интеграции — добавить.
 
 ---
 
 ### Листинг В.7 — Ленивая загрузка маршрутов Vue Router
 
-**Расположение:** Приложение В, абзац 1733.
-**Ссылка из текста:** абзац 714 — "Реализация ленивой загрузки маршрутов показана в Листинге В.7 (Приложение В)" — корректна.
-**Размер:** 54 строки — в норме для приложения.
-**Файл в проекте:** `src/router/index.js`.
+**Подпись:** OK. **Ссылка (абз. 714):** OK. **Размер:** 54 строки — норма для приложения.
 
-**Реальный код в проекте:**
+**Имитация интеграции:** роутер защищает приватные страницы по JWT. Токен хранится в Pinia-сторе `useAuthStore`, получается из `POST /auth/sign-in`. Список маршрутов — приведён к реальной структуре `src/views/` (`MainPage`, `DocumentPage`, `AnalysisPage`, `AccountPage`) + лендинг + страницы входа/регистрации.
+
+**Что должно быть в листинге:**
 
 ```javascript
+// src/router/index.js (Листинг В.7)
 import { createRouter, createWebHistory } from 'vue-router'
-import MainPage from '../views/MainPage.vue'
-import DocumentPage from '../views/DocumentPage.vue'
-import AnalysisPage from '../views/AnalysisPage.vue'
-import AccountPage from '../views/AccountPage.vue'
+import { useAuthStore } from '@/stores/auth'
 
 const routes = [
-  { path: '/',          name: 'MainPage',     component: MainPage },
-  { path: '/documents', name: 'DocumentPage', component: DocumentPage },
-  { path: '/analysis',  name: 'AnalysisPage', component: AnalysisPage },
-  { path: '/account',   name: 'AccountPage',  component: AccountPage }
+  { path: '/landing', name: 'Landing',
+    component: () => import('@/components/landing/LandingPage.vue') },
+  { path: '/login',   name: 'Login',
+    component: () => import('@/views/LoginPage.vue') },
+  { path: '/signup',  name: 'Signup',
+    component: () => import('@/views/SignupPage.vue') },
+  {
+    path: '/', name: 'MainPage',
+    component: () => import('@/views/MainPage.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/documents', name: 'DocumentPage',
+    component: () => import('@/views/DocumentPage.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/analysis', name: 'AnalysisPage',
+    component: () => import('@/views/AnalysisPage.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/account', name: 'AccountPage',
+    component: () => import('@/views/AccountPage.vue'),
+    meta: { requiresAuth: true },
+  },
 ]
 
 const router = createRouter({
   history: createWebHistory(),
-  routes
+  routes,
+  scrollBehavior: () => ({ top: 0 }),
 })
+
+router.beforeEach((to) => {
+  const auth = useAuthStore()
+  if (to.meta.requiresAuth && !auth.isAuthenticated) {
+    return { path: '/login', query: { redirect: to.fullPath } }
+  }
+})
+
 export default router
 ```
 
-**Соответствие кода:** **не соответствует.**
+**Изменения относительно текущей версии диплома:**
+- Убран блок `/admin` с `requiresRole` — у бэка ролей нет, только базовая аутентификация.
+- Имена маршрутов и пути приведены к реальной структуре `src/views/` (`MainPage`, `DocumentPage`, `AnalysisPage`, `AccountPage`).
+- Лендинг лежит под `/landing` и переносится из отдельного проекта лендинга при объединении.
 
-- В дипломе: ленивая загрузка через `() => import('...')` для всех маршрутов, защита через `meta: { requiresAuth }`, навигационный guard, admin-роуты с детьми и `requiresRole`.
-- В проекте: статический импорт всех страниц, нет guard-ов, нет admin-роутов, 4 маршрута вместо 8.
-
-**Предлагаемая правка (вариант A):** перевести роутер на lazy loading и добавить guard. Это полезный рефакторинг — тогда листинг будет правдой. **Требует правки кода в проекте.**
-
-**Предлагаемая правка (вариант B, без правки проекта):** заменить листинг В.7 на реальный код выше (около 18 строк), убрать упоминание lazy loading из абзаца 714 либо переформулировать его — например: "Маршрутизация реализована через Vue Router с прямым импортом страниц; при росте приложения предусмотрена возможность перевода на ленивую загрузку через `() => import('...')`".
+**Что нужно изменить в проекте:** перевести `src/router/index.js` на динамические импорты, добавить стор `src/stores/auth.js`, реализовать `LoginPage.vue` и `SignupPage.vue`.
 
 ---
 
 ### Листинг В.8 — Конфигурация Vite для production-сборки
 
-**Расположение:** Приложение В, абзац 1790.
-**Ссылка из текста:** абзац 715 — "Конфигурация Vite для production-сборки приведена в Листинге В.8 (Приложение В)" — корректна по форме.
-**Размер:** 28 строк — в норме.
-**Файл в проекте:** `vite.config.js` **отсутствует.** Реально проект собирается через Vue CLI (`vue.config.js`, webpack под капотом). Vite в `package.json` присутствует только как `@vitejs/plugin-vue` и `vitest`/`@vitest/coverage-v8` для юнит-тестов.
+**Подпись:** OK. **Ссылка (абз. 715):** OK. **Размер:** 28 строк — норма.
 
-**Реальный `vue.config.js`:**
+**Имитация интеграции:** конфигурация Vite, в которой dev-сервер проксирует `/api/*` и `/auth/*` на dokkee-backend по адресу `http://localhost:8000`.
 
-```javascript
-const { defineConfig } = require('@vue/cli-service')
-
-module.exports = defineConfig({
-  transpileDependencies: true
-})
-
-module.exports = {
-  publicPath: process.env.NODE_ENV === 'production' ? '/dokkee-front/' : '/',
-  devServer: {
-    allowedHosts: 'all',
-    client: { webSocketURL: 'auto://0.0.0.0:0/ws' }
-  },
-  chainWebpack: config => {
-    config.plugin('html').tap(args => {
-      args[0].title = 'Dokkee - сервис проверки документов'
-      return args
-    })
-  }
-}
-```
-
-**Соответствие кода:** не соответствует. Это **не Vite**.
-
-**Предлагаемая правка (вариант A):** перевести проект на Vite — это серьёзный рефакторинг (заменить vue-cli, переписать `vue.config.js` -> `vite.config.js`, обновить package-скрипты, проверить совместимость pdf.js и docx-preview). После рефакторинга листинг можно оставить.
-
-**Предлагаемая правка (вариант B, без правки проекта):** заменить листинг и подпись на конфигурацию Vue CLI, абзац 715 переписать в формулировке "Webpack через Vue CLI" вместо "Vite". Конкретный код листинга:
+**Что должно быть в листинге:**
 
 ```javascript
-// vue.config.js — production-конфигурация Vue CLI
-const { defineConfig } = require('@vue/cli-service')
+// vite.config.js (Листинг В.8)
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+import path from 'path'
 
-module.exports = defineConfig({
-  transpileDependencies: true,
-  publicPath: process.env.NODE_ENV === 'production' ? '/dokkee-front/' : '/',
-  productionSourceMap: false,
-  devServer: {
-    allowedHosts: 'all',
-    client: { webSocketURL: 'auto://0.0.0.0:0/ws' }
+export default defineConfig(({ mode }) => ({
+  plugins: [vue()],
+  resolve: {
+    alias: { '@': path.resolve(__dirname, './src') },
   },
-  chainWebpack: (config) => {
-    config.plugin('html').tap((args) => {
-      args[0].title = 'Dokkee - сервис проверки документов'
-      return args
-    })
-    config.optimization.splitChunks({
-      cacheGroups: {
-        vendorVue: { test: /[\\/]node_modules[\\/](vue|pinia|vue-router)/,
-                     name: 'vendor-vue', chunks: 'all' },
-        vendorPdf: { test: /[\\/]node_modules[\\/](pdfjs-dist|docx-preview)/,
-                     name: 'vendor-pdf', chunks: 'all' }
-      }
-    })
-  }
-})
+  build: {
+    target: 'es2020',
+    sourcemap: mode === 'production' ? 'hidden' : true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-vue': ['vue', 'vue-router', 'pinia'],
+          'vendor-pdf': ['pdfjs-dist', 'docx-preview'],
+        },
+        chunkFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash][extname]',
+      },
+    },
+    chunkSizeWarningLimit: 600,
+  },
+  server: {
+    proxy: {
+      '/api':  { target: 'http://localhost:8000', changeOrigin: true },
+      '/auth': { target: 'http://localhost:8000', changeOrigin: true },
+    },
+  },
+}))
 ```
 
-**Также соответствующим образом исправить абзац 715:** заменить "Сборщик Vite выполняет tree-shaking..." на "Сборщик Webpack (через Vue CLI) выполняет tree-shaking..." и далее по тексту.
+**Изменения относительно текущей версии диплома:**
+- Прокси теперь покрывает и `/api/`, и `/auth/` — оба маршрута dokkee-backend.
+- Цель прокси — `http://localhost:8000` (порт по умолчанию бэка).
+- В чанк `vendor-pdf` добавлен `docx-preview` (используется для превью DOCX).
+- Удалён чанк `vendor-ui` с `@vueuse/core` — пока эта зависимость нужна только в лендинге (отдельный репозиторий).
+
+**Что нужно изменить в проекте:** в текущем `dokkee-front` сборка через Vue CLI (webpack). Для имитации интеграции либо мигрировать на Vite, либо в дипломе заменить упоминание Vite на Vue CLI и привести `vue.config.js`.
 
 ---
 
@@ -583,32 +690,42 @@ module.exports = defineConfig({
 |-----------|----------|
 | Всего листингов в дипломе | 11 |
 | Корректные подписи | 11 / 11 |
-| Корректные ссылки в тексте | 10 / 11 |
-| Ошибочные ссылки | 1 (абз. 671 -> В.4 вместо В.3) |
-| Размеры в норме | 11 / 11 (в основной части до 50 строк, в Приложении В без жёсткого лимита) |
-| Листинги, полностью соответствующие коду проекта | 0 / 11 |
-| Листинги, частично соответствующие | 2 (3.3 — частично, В.5 — частично) |
-| Листинги, требующие замены кода | 9 / 11 |
+| Корректные ссылки в тексте | 10 / 11 (1 ошибка: абз. 671 -> В.4 вместо В.3) |
+| Размеры в норме | 11 / 11 |
+| Листинги, требующие правки кода | 9 / 11 |
+| Листинги, требующие пометки "из отдельного проекта" | 2 (3.1 и В.1 — лендинг) |
 
-### Приоритетный список правок
+### Приоритетный список правок текста диплома
 
-**Высокий приоритет (защита диплома):**
+**Обязательные правки в основном тексте:**
 
-1. **Абзац 671: исправить ссылку.** "Код загрузки приведён в Листинге В.4" -> "в Листинге В.3".
-2. **Абзац 718: уточнить ссылку.** "Полный код — в Листинге В.5" -> "Полный код CSP — в Листинге В.4, функция экранирования — в Листинге В.5".
+1. **Абзац 671:** "приведён в Листинге В.4" -> "в Листинге В.3".
+2. **Абзац 671:** `POST /api/documents/upload` -> `POST /api/documents`.
+3. **Абзац 671:** `taskId` -> идентификатор документа (`id`), polling маршрут `/api/documents/result/{taskId}` -> `/api/documents/:id/result`.
+4. **Абзац 41:** `POST /api/auth/login` -> `POST /auth/sign-in`. Упоминание refresh-токена и `/api/auth/refresh` либо убрать, либо переформулировать как доработку.
+5. **Абзац 44:** `POST /api/ai/chat` — эндпоинта нет. Описать чат как прямой вызов DeepSeek через клиентский сервис `src/services/deepseek.js`.
+6. **Абзац 45:** убрать упоминания `DELETE /api/documents/:id`, `PATCH /api/documents/:id` (переименование), `GET /api/analytics` — этих маршрутов нет в бэке. Либо переписать как локальные действия, либо запланировать на доработку бэка.
+7. **Абзац 718:** "Полный код — в Листинге В.5" -> "Полный код CSP — в Листинге В.4, функция экранирования — в Листинге В.5".
 
-**Средний приоритет (соответствие коду):**
+### Список правок проекта `dokkee-front` (если идти по пути имитации)
 
-3. **Листинг 3.2, В.3 и тексты вокруг:** переписать под реальный `src/stores/documents.js` (options API, без HTTP, локальное состояние). Альтернатива — отметить в тексте, что листинг показывает целевую архитектуру с бэкендом, и фактический код фронтенда работает автономно.
-4. **Листинг В.7:** заменить на реальный простой роутер или провести рефакторинг проекта (добавить lazy loading).
-5. **Листинг В.8 + абзац 715:** заменить "Vite" на "Webpack (через Vue CLI)" и привести конфигурацию `vue.config.js`. Альтернатива — мигрировать проект на Vite.
+| Файл / директория | Действие |
+|-------------------|----------|
+| `src/api/client.js` | Создать: обёртка над axios/fetch с автоматическим добавлением `Authorization: Bearer <token>` и базовым URL |
+| `src/stores/auth.js` | Создать: хранение токена, методы `signIn`/`signUp`/`signOut`, `isAuthenticated`, `loadProfile` |
+| `src/stores/documents.js` | Переписать: добавить методы `upload`, `fetchList`, `pollResult` под реальный контракт бэка |
+| `src/views/LoginPage.vue`, `src/views/SignupPage.vue` | Создать: формы входа и регистрации |
+| `src/router/index.js` | Перевести на динамические импорты, добавить `beforeEach` с проверкой токена |
+| `src/utils/escape.js` | Создать; убрать дубли из `AiAssistant.vue` и `reportExport.js` |
+| `src/utils/storage.js` | Создать: обёртка над localStorage с префиксом |
+| `vite.config.js` | Опционально: миграция с Vue CLI на Vite — обновить package-скрипты, удалить `vue.config.js` |
+| `src/components/landing/` | Перенести компоненты лендинга из отдельного репозитория |
+| `src/components/RiskCard.vue` | Опционально: вынести карточку риска в отдельный компонент |
 
-**Низкий приоритет (косметика и доработка проекта):**
+### Общая рекомендация
 
-6. **Листинг В.5:** свести `escapeHtml` к единому файлу `src/utils/escape.js` в проекте, чтобы листинг отражал реальное состояние.
-7. **Листинг В.6:** реализовать `src/utils/storage.js` в проекте или убрать листинг из приложения.
-8. **Листинг 3.1 / В.1:** либо реализовать лендинг в проекте, либо переименовать листинг и привести в нём реальный компонент основного интерфейса.
+Самый защищаемый сценарий:
 
-### Общая рекомендация для защиты
-
-Самый защищаемый вариант — **добавить в текст диплома (например, во вступление к Приложению В) явное указание**: "Листинги приведены в соответствии с проектной архитектурой; в репозитории `dokkee-front` реализован автономный режим без серверной интеграции, фактический код доступен в исходниках проекта". Это снимает большую часть вопросов комиссии о расхождениях, но требует выполнения высокоприоритетных правок ссылок и подписей.
+1. **Внести правки текста диплома** (пункты 1-7 выше) — снимает ошибки несоответствия эндпоинтов и одну неверную ссылку. Сделать **обязательно**.
+2. **Указать в начале Приложения В**, что листинги показывают **целевую архитектуру единого сервиса** (фронтенд + бэкенд + лендинг). Это объясняет различия с автономным состоянием репозитория `dokkee-front`.
+3. **Правки кода `dokkee-front`** делать опционально и постепенно — для защиты они не обязательны, если есть пометка из пункта 2.
